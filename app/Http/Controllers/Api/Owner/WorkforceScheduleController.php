@@ -1,0 +1,8 @@
+<?php
+namespace App\Http\Controllers\Api\Owner;
+use App\Http\Controllers\Controller; use App\Models\WorkforceSchedule; use Illuminate\Http\JsonResponse; use Illuminate\Http\Request;
+class WorkforceScheduleController extends Controller {
+  public function index(Request $r): JsonResponse { return response()->json(WorkforceSchedule::with('user:id,name,role')->where('shop_id',$r->user()->shop_id)->orderByDesc('shift_date')->get()); }
+  public function store(Request $r): JsonResponse { $v=$r->validate(['user_id'=>'required|integer|exists:users,id','shift_date'=>'required|date','shift_start'=>'nullable|date_format:H:i','shift_end'=>'nullable|date_format:H:i','assignment_notes'=>'nullable|string','is_day_off'=>'nullable|boolean','is_overtime'=>'nullable|boolean']); $m=WorkforceSchedule::create(array_merge($v,['shop_id'=>$r->user()->shop_id])); return response()->json($m->load('user:id,name,role'),201);} 
+  public function update(Request $r,WorkforceSchedule $workforceSchedule): JsonResponse { abort_unless($workforceSchedule->shop_id===$r->user()->shop_id,403); $v=$r->validate(['user_id'=>'nullable|integer|exists:users,id','shift_date'=>'nullable|date','shift_start'=>'nullable|date_format:H:i','shift_end'=>'nullable|date_format:H:i','assignment_notes'=>'nullable|string','is_day_off'=>'nullable|boolean','is_overtime'=>'nullable|boolean']); $workforceSchedule->update($v); return response()->json($workforceSchedule->fresh()->load('user:id,name,role')); }
+}

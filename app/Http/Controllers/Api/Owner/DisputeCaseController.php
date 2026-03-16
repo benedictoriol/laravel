@@ -1,0 +1,8 @@
+<?php
+namespace App\Http\Controllers\Api\Owner;
+use App\Http\Controllers\Controller; use App\Models\DisputeCase; use Illuminate\Http\JsonResponse; use Illuminate\Http\Request;
+class DisputeCaseController extends Controller {
+  public function index(Request $r): JsonResponse { return response()->json(DisputeCase::with(['order:id,order_number','complainant:id,name','handler:id,name'])->where('shop_id',$r->user()->shop_id)->latest('id')->get()); }
+  public function store(Request $r): JsonResponse { $v=$r->validate(['order_id'=>'nullable|integer|exists:orders,id','complainant_user_id'=>'nullable|integer|exists:users,id','assigned_handler_user_id'=>'nullable|integer|exists:users,id','dispute_type'=>'required|string|max:100','issue_summary'=>'required|string','attachments_json'=>'nullable|array','status'=>'nullable|string|max:50','resolution'=>'nullable|string','resolved_at'=>'nullable|date']); $m=DisputeCase::create(array_merge($v,['shop_id'=>$r->user()->shop_id,'status'=>$v['status']??'open'])); return response()->json($m->load(['order:id,order_number','complainant:id,name','handler:id,name']),201);} 
+  public function update(Request $r,DisputeCase $disputeCase): JsonResponse { abort_unless($disputeCase->shop_id===$r->user()->shop_id,403); $v=$r->validate(['assigned_handler_user_id'=>'nullable|integer|exists:users,id','dispute_type'=>'nullable|string|max:100','issue_summary'=>'nullable|string','attachments_json'=>'nullable|array','status'=>'nullable|string|max:50','resolution'=>'nullable|string','resolved_at'=>'nullable|date']); $disputeCase->update($v); return response()->json($disputeCase->fresh()->load(['order:id,order_number','complainant:id,name','handler:id,name'])); }
+}
