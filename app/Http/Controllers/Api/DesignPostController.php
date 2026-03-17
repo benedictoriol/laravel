@@ -11,6 +11,7 @@ use App\Models\Shop;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class DesignPostController extends Controller
 {
@@ -24,7 +25,8 @@ class DesignPostController extends Controller
         } elseif (! $user->isAdmin()) {
             $query->where(function ($q) use ($user) {
                 $q->whereNull('selected_shop_id')
-                  ->orWhere('selected_shop_id', $user->shop_id ?? 0);
+                  ->orWhere('selected_shop_id', $user->shop_id ?? 0)
+                  ->orWhereHas('applications', fn ($aq) => $aq->where('shop_id', $user->shop_id ?? 0));
             });
         }
 
@@ -50,7 +52,14 @@ class DesignPostController extends Controller
             'deadline_date' => ['nullable', 'date'],
             'visibility' => ['nullable', 'in:public,private,closed'],
             'notes' => ['nullable', 'string'],
+            'reference_file' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf,ai,eps,svg,zip,rar,7z,doc,docx', 'max:15360'],
+            'reference_file_path' => ['nullable', 'string', 'max:255'],
         ]);
+
+        $referencePath = $validated['reference_file_path'] ?? null;
+        if ($request->hasFile('reference_file')) {
+            $referencePath = $request->file('reference_file')->store('design-posts', 'public');
+        }
 
         $designPost = DesignPost::create([
             'client_user_id' => $user->id,
@@ -65,10 +74,11 @@ class DesignPostController extends Controller
             'deadline_date' => $validated['deadline_date'] ?? null,
             'visibility' => $validated['visibility'] ?? 'public',
             'notes' => $validated['notes'] ?? null,
+            'reference_file_path' => $referencePath,
             'status' => 'open',
         ]);
 
-        return response()->json($designPost->load(['client', 'selectedShop']), 201);
+        return response()->json($designPost->load(['client', 'selectedShop', 'applications.shop', 'applications.owner']), 201);
     }
 
     public function show(Request $request, DesignPost $designPost): JsonResponse
@@ -96,7 +106,16 @@ class DesignPostController extends Controller
             'visibility' => ['nullable', 'in:public,private,closed'],
             'status' => ['nullable', 'in:open,under_review,shop_selected,converted_to_order,cancelled,completed'],
             'notes' => ['nullable', 'string'],
+            'reference_file' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf,ai,eps,svg,zip,rar,7z,doc,docx', 'max:15360'],
+            'reference_file_path' => ['nullable', 'string', 'max:255'],
         ]);
+
+        if ($request->hasFile('reference_file')) {
+            if ($designPost->reference_file_path) {
+                Storage::disk('public')->delete($designPost->reference_file_path);
+            }
+            $validated['reference_file_path'] = $request->file('reference_file')->store('design-posts', 'public');
+        }
 
         if (($validated['status'] ?? null) === 'closed') {
             $validated['closed_at'] = now();
@@ -115,11 +134,31 @@ class DesignPostController extends Controller
         }
 
         $validated = $request->validate([
-            'application_id' => ['required', 'integer', 'exists:job_post_applications,id'],
+            'application_id' => ['nullable', 'integer', 'exists:job_post_applications,id'],
+            'shop_id' => ['nullable', 'integer', 'exists:shops,id'],
             'convert_to_order' => ['nullable', 'boolean'],
         ]);
 
-        $application = JobPostApplication::where('design_post_id', $designPost->id)->findOrFail($validated['application_id']);
+        if (empty($validated['application_id']) && empty($validated['shop_id'])) {
+            abort(422, 'A shop or proposal must be selected.');
+        }
+
+        $application = null;
+        if (! empty($validated['application_id'])) {
+            $application = JobPostApplication::where('design_post_id', $designPost->id)->findOrFail($validated['application_id']);
+        } else {
+            $shop = Shop::findOrFail($validated['shop_id']);
+            $application = JobPostApplication::firstOrCreate(
+                ['design_post_id' => $designPost->id, 'shop_id' => $shop->id],
+                [
+                    'owner_user_id' => $shop->owner_user_id,
+                    'status' => 'accepted',
+                    'applied_at' => now(),
+                    'responded_at' => now(),
+                    'message' => 'Selected directly by client for proofing and quotation request.',
+                ]
+            );
+        }
 
         DB::transaction(function () use ($designPost, $application, $validated) {
             JobPostApplication::where('design_post_id', $designPost->id)
@@ -133,7 +172,7 @@ class DesignPostController extends Controller
                 'status' => 'shop_selected',
             ];
 
-            if (($validated['convert_to_order'] ?? true) === true) {
+            if (($validated['convert_to_order'] ?? false) === true) {
                 $order = Order::create([
                     'order_number' => 'ORD-'.now()->format('Ymd').'-'.str_pad((string) random_int(0, 9999), 4, '0', STR_PAD_LEFT),
                     'client_user_id' => $designPost->client_user_id,
@@ -152,19 +191,21 @@ class DesignPostController extends Controller
 
                 $updates['converted_order_id'] = $order->id;
                 $updates['status'] = 'converted_to_order';
+            }
 
+            $designPost->update($updates);
+
+            if ($application->owner_user_id) {
                 PlatformNotification::create([
                     'user_id' => $application->owner_user_id,
                     'type' => 'design_post_selected',
-                    'title' => 'Your shop was selected',
-                    'message' => 'A client selected your shop for design post "'.$designPost->title.'".',
+                    'title' => 'Client selected your shop',
+                    'message' => 'A client selected your shop for “'.$designPost->title.'”.',
                     'reference_type' => 'design_post',
                     'reference_id' => $designPost->id,
                     'channel' => 'web',
                 ]);
             }
-
-            $designPost->update($updates);
         });
 
         return response()->json($designPost->fresh(['client', 'selectedShop', 'applications.shop', 'applications.owner']));

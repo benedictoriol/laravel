@@ -45,16 +45,23 @@ class ShopProjectController extends Controller
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:180'],
             'description' => ['required', 'string'],
+            'embroidery_size' => ['nullable', 'string', 'max:100'],
+            'canvas_used' => ['nullable', 'string', 'max:120'],
             'category' => ['nullable', 'string', 'max:80'],
             'base_price' => ['required', 'numeric', 'min:0'],
             'min_order_qty' => ['nullable', 'integer', 'min:1'],
             'turnaround_days' => ['nullable', 'integer', 'min:1'],
             'is_customizable' => ['nullable', 'boolean'],
             'preview_image_path' => ['nullable', 'string', 'max:255'],
+            'preview_image' => ['nullable', 'image', 'max:4096'],
             'default_fulfillment_type' => ['nullable', 'in:pickup,delivery'],
             'automation_profile_json' => ['nullable', 'array'],
             'tags_json' => ['nullable', 'array'],
         ]);
+        if ($request->hasFile('preview_image')) {
+            $validated['preview_image_path'] = $request->file('preview_image')->store('shop-projects', 'public');
+        }
+        unset($validated['preview_image']);
         $project = ShopProject::create(array_merge($validated, [
             'shop_id' => $user->shop_id,
             'created_by' => $user->id,
@@ -70,6 +77,8 @@ class ShopProjectController extends Controller
         $validated = $request->validate([
             'title' => ['sometimes', 'required', 'string', 'max:180'],
             'description' => ['sometimes', 'required', 'string'],
+            'embroidery_size' => ['nullable', 'string', 'max:100'],
+            'canvas_used' => ['nullable', 'string', 'max:120'],
             'category' => ['nullable', 'string', 'max:80'],
             'base_price' => ['nullable', 'numeric', 'min:0'],
             'min_order_qty' => ['nullable', 'integer', 'min:1'],
@@ -77,10 +86,15 @@ class ShopProjectController extends Controller
             'is_customizable' => ['nullable', 'boolean'],
             'is_active' => ['nullable', 'boolean'],
             'preview_image_path' => ['nullable', 'string', 'max:255'],
+            'preview_image' => ['nullable', 'image', 'max:4096'],
             'default_fulfillment_type' => ['nullable', 'in:pickup,delivery'],
             'automation_profile_json' => ['nullable', 'array'],
             'tags_json' => ['nullable', 'array'],
         ]);
+        if ($request->hasFile('preview_image')) {
+            $validated['preview_image_path'] = $request->file('preview_image')->store('shop-projects', 'public');
+        }
+        unset($validated['preview_image']);
         $shopProject->update($validated);
         return response()->json($shopProject->fresh(['shop', 'creator']));
     }

@@ -41,22 +41,22 @@ const createOrderForm = reactive({
   fulfillment_type: 'pickup',
   customer_notes: '',
   delivery_address: '',
-  item_name: 'Polo Shirt Logo',
-  quantity: 10,
-  unit_price: 150,
+  item_name: '',
+  quantity: '',
+  unit_price: '',
 });
 
-const paymentForm = reactive({ amount: 500, payment_type: 'downpayment', transaction_reference: '', payer_name: '', notes: '' });
+const paymentForm = reactive({ amount: '', payment_type: 'downpayment', transaction_reference: '', payer_name: '', notes: '' });
 const revisionForm = reactive({ revision_type: 'color_change', request_notes: '' });
 const assignmentForm = reactive({ assignment_role: 'staff', assignment_type: 'digitizing', assigned_to: '', notes: '' });
-const fulfillmentForm = reactive({ receiver_name: '', receiver_contact: '', delivery_address: '', courier_name: '', tracking_number: '', shipping_fee: 0, notes: '' });
-const previewForm = reactive({ preview_file_path: 'revisions/order-preview.png', response_notes: '' });
+const fulfillmentForm = reactive({ receiver_name: '', receiver_contact: '', delivery_address: '', courier_name: '', tracking_number: '', shipping_fee: '', notes: '' });
+const previewForm = reactive({ preview_file_path: '', response_notes: '' });
 const profileForm = reactive({ organization_name: '', default_address: '', postal_code: '', preferred_contact_method: 'email', preferred_fulfillment_type: 'pickup', notes: '', saved_measurements_json: { chest: '', sleeve: '' }, default_garment_preferences_json: { garment_type: '', fabric_type: '' } });
-const customizationForm = reactive({ design_post_id: '', order_id: '', name: '', garment_type: 'Polo Shirt', placement_area: 'left_chest', fabric_type: 'cotton', width_mm: 80, height_mm: 80, color_count: 3, stitch_count_estimate: 5000, complexity_level: 'standard', quantity: 10, design_type: 'logo', is_rush: false, notes: '' });
-const projectForm = reactive({ title: '', description: '', category: 'logo_embroidery', base_price: 150, min_order_qty: 1, turnaround_days: 3, is_customizable: true, default_fulfillment_type: 'pickup' });
-const designPostForm = reactive({ title: '', description: '', design_type: 'logo', garment_type: 'Polo Shirt', quantity: 10, target_budget: 2000, notes: '' });
-const bargainingForm = reactive({ design_post_id: '', amount: 1500, estimated_days: 5, message: '' });
-const projectOrderForm = reactive({ quantity: 1, fulfillment_type: 'pickup', customer_notes: '', customization_notes: '' });
+const customizationForm = reactive({ design_post_id: '', order_id: '', name: '', garment_type: '', placement_area: '', fabric_type: '', width_mm: '', height_mm: '', color_count: '', stitch_count_estimate: '', complexity_level: 'standard', quantity: '', design_type: 'logo', is_rush: false, notes: '' });
+const projectForm = reactive({ title: '', description: '', category: 'logo_embroidery', base_price: '', min_order_qty: '', turnaround_days: '', is_customizable: true, default_fulfillment_type: 'pickup' });
+const designPostForm = reactive({ title: '', description: '', design_type: 'logo', garment_type: '', quantity: '', target_budget: '', notes: '' });
+const bargainingForm = reactive({ design_post_id: '', amount: '', estimated_days: '', message: '' });
+const projectOrderForm = reactive({ quantity: '', fulfillment_type: 'pickup', customer_notes: '', customization_notes: '' });
 
 const selectedOrder = computed(() => orders.value.find((order) => order.id === selectedOrderId.value) || null);
 const selectedCustomization = computed(() => designCustomizations.value.find((item) => item.id === selectedCustomizationId.value) || null);
@@ -178,9 +178,6 @@ async function loadNotifications() {
 async function loadShops() {
   const { data } = await api('get', '/api/shops');
   shops.value = data;
-  if (isClient.value && !createOrderForm.shop_id && data.length) {
-    createOrderForm.shop_id = data[0].id;
-  }
 }
 
 async function loadPayments() {
@@ -221,9 +218,6 @@ async function loadDesignCustomizations() {
 async function loadDesignPosts() {
   const { data } = await api('get', '/api/design-posts');
   designPosts.value = data;
-  if (!bargainingForm.design_post_id && data.length) {
-    bargainingForm.design_post_id = data[0].id;
-  }
 }
 
 async function loadShopProjects() {

@@ -9,9 +9,12 @@ use App\Models\OrderProgressLog;
 use App\Models\PlatformNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use App\Services\ProductionOrchestrationService;
 
 class DesignProofController extends Controller
 {
+    public function __construct(protected ProductionOrchestrationService $production) {}
+
     public function index(DesignCustomization $designCustomization): JsonResponse
     {
         return response()->json($designCustomization->proofs()->latest('proof_no')->get());
@@ -51,8 +54,11 @@ class DesignProofController extends Controller
         PlatformNotification::create([
             'user_id' => $designCustomization->user_id,
             'type' => 'design_proof_ready',
+            'category' => 'production',
+            'priority' => 'medium',
             'title' => 'Design proof ready',
             'message' => 'Proof #'.$proof->proof_no.' is ready for '.$designCustomization->name.'.',
+            'action_label' => 'Review proof',
             'reference_type' => 'design_proof',
             'reference_id' => $proof->id,
             'channel' => 'web',
@@ -89,12 +95,30 @@ class DesignProofController extends Controller
                     'actor_user_id' => $request->user()->id,
                 ]);
             }
+            PlatformNotification::create([
+                'user_id' => $designProof->generated_by,
+                'type' => 'design_proof_approved',
+                'category' => 'production',
+                'priority' => 'medium',
+                'title' => 'Proof approved',
+                'message' => 'Client approved proof #'.$designProof->proof_no.'. You can continue with quote and production preparation.',
+                'action_label' => 'Open proof',
+                'reference_type' => 'design_proof',
+                'reference_id' => $designProof->id,
+                'channel' => 'web',
+            ]);
         } else {
+            if ($designCustomization->order) {
+                $this->production->routeException($designCustomization->order, 'proof_rejected', 'Client rejected proof #'.$designProof->proof_no.'. '.($validated['annotated_notes'] ?? ''), 'medium');
+            }
             PlatformNotification::create([
                 'user_id' => $designProof->generated_by,
                 'type' => 'design_proof_rejected',
+                'category' => 'production',
+                'priority' => 'high',
                 'title' => 'Design proof rejected',
                 'message' => 'Proof #'.$designProof->proof_no.' needs another revision pass.',
+                'action_label' => 'Revise proof',
                 'reference_type' => 'design_proof',
                 'reference_id' => $designProof->id,
                 'channel' => 'web',

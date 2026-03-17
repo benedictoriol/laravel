@@ -8,6 +8,8 @@ use App\Models\MessageThread;
 use App\Models\Order;
 use App\Models\PlatformNotification;
 use App\Models\Shop;
+use App\Models\ShopProject;
+use App\Models\DesignPost;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -19,7 +21,10 @@ class ClientMessageController extends Controller
 
         return response()->json(
             MessageThread::with(['messages.sender:id,name'])
-                ->whereIn('shop_id', $shopIds)
+                ->where(function ($query) use ($shopIds, $request) {
+                    $query->whereIn('shop_id', $shopIds)
+                        ->orWhereJsonContains('participant_user_ids_json', $request->user()->id);
+                })
                 ->where(function ($query) use ($request) {
                     $query->whereJsonContains('participant_user_ids_json', $request->user()->id)
                         ->orWhereHas('order', fn ($orderQuery) => $orderQuery->where('client_user_id', $request->user()->id));
@@ -36,6 +41,8 @@ class ClientMessageController extends Controller
             'order_id' => ['nullable', 'integer', 'exists:orders,id'],
             'title' => ['required', 'string', 'max:150'],
             'message' => ['required', 'string'],
+            'context_type' => ['nullable', 'in:shop_project,design_post'],
+            'context_id' => ['nullable', 'integer'],
         ]);
 
         $shop = Shop::findOrFail($validated['shop_id']);
@@ -44,7 +51,21 @@ class ClientMessageController extends Controller
             ->when(! empty($validated['order_id']), fn ($query) => $query->where('id', $validated['order_id']))
             ->exists();
 
-        abort_unless($hasRelationship, 403, 'You can only message shops you ordered from before.');
+        $allowedByContext = false;
+        if (($validated['context_type'] ?? null) === 'shop_project' && ! empty($validated['context_id'])) {
+            $project = ShopProject::find($validated['context_id']);
+            $allowedByContext = $project && (int) $project->shop_id === (int) $shop->id;
+        }
+        if (($validated['context_type'] ?? null) === 'design_post' && ! empty($validated['context_id'])) {
+            $designPost = DesignPost::find($validated['context_id']);
+            $allowedByContext = $designPost && ((int) $designPost->selected_shop_id === (int) $shop->id || $designPost->applications()->where('shop_id', $shop->id)->exists());
+        }
+
+        abort_unless($hasRelationship || $allowedByContext, 403, 'You can only message related shops.');
+
+        $threadType = ! empty($validated['order_id'])
+            ? 'order_chat'
+            : (($validated['context_type'] ?? null) === 'shop_project' ? 'project_inquiry' : (($validated['context_type'] ?? null) === 'design_post' ? 'design_post_inquiry' : 'direct_message'));
 
         $thread = MessageThread::firstOrCreate(
             [
@@ -53,7 +74,7 @@ class ClientMessageController extends Controller
                 'title' => $validated['title'],
             ],
             [
-                'type' => ! empty($validated['order_id']) ? 'order_chat' : 'direct_message',
+                'type' => $threadType,
                 'participant_user_ids_json' => array_values(array_filter([$request->user()->id, $shop->owner_user_id])),
                 'last_message_at' => now(),
             ]

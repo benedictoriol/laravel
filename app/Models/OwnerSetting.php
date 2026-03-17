@@ -11,7 +11,7 @@ class OwnerSetting extends Model
         'default_labor_rate','rush_fee_percent','default_profit_margin','minimum_order_quantity',
         'max_rush_orders_per_day','cancellation_rules','notification_settings_json',
         'delivery_defaults_json','ui_preferences_json','security_settings_json',
-        'workflow_automation_settings_json','document_settings_json','approval_settings_json',
+        'workflow_automation_settings_json','document_settings_json','approval_settings_json','pricing_rules_json','quote_automation_controls_json','minimum_billable_amount','max_manual_discount_percent',
     ];
 
     protected function casts(): array
@@ -27,6 +27,10 @@ class OwnerSetting extends Model
             'workflow_automation_settings_json' => 'array',
             'document_settings_json' => 'array',
             'approval_settings_json' => 'array',
+            'pricing_rules_json' => 'array',
+            'quote_automation_controls_json' => 'array',
+            'minimum_billable_amount' => 'decimal:2',
+            'max_manual_discount_percent' => 'decimal:2',
         ];
     }
 

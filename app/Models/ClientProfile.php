@@ -8,6 +8,16 @@ class ClientProfile extends Model
 {
     protected $fillable = [
         'user_id',
+        'first_name',
+        'middle_name',
+        'last_name',
+        'email',
+        'phone_number',
+        'registration_date',
+        'billing_contact_name',
+        'billing_phone',
+        'billing_email',
+        'default_payment_method',
         'cavite_location_id',
         'default_address',
         'postal_code',
@@ -23,6 +33,7 @@ class ClientProfile extends Model
     protected function casts(): array
     {
         return [
+            'registration_date' => 'date',
             'mobile_push_enabled' => 'boolean',
             'saved_measurements_json' => 'array',
             'default_garment_preferences_json' => 'array',
@@ -34,4 +45,3 @@ class ClientProfile extends Model
     public function user() { return $this->belongsTo(User::class); }
     public function addresses() { return $this->hasMany(ClientSavedAddress::class); }
 }
-

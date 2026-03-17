@@ -1,0 +1,27 @@
+<?php
+
+return [
+    'Alfonso' => ['Amuyong', 'Buck Estate', 'Marahan I', 'Marahan II', 'Poblacion I'],
+    'Amadeo' => ['Banaybanay', 'Poblacion I', 'Pangil', 'Salaban', 'Tamacan'],
+    'Bacoor' => ['Alima', 'Bayanan', 'Mambog I', 'Molinio III', 'Talaba IV'],
+    'Carmona' => ['Bancal', 'Cabilang Baybay', 'Lantic', 'Maduya', 'Poblacion'],
+    'Cavite City' => ['Caridad', 'San Antonio', 'San Roque', 'Santa Cruz', 'Talon'],
+    'Dasmariñas' => ['Burol I', 'Paliparan I', 'Sabang', 'Salawag', 'Zone I'],
+    'General Emilio Aguinaldo' => ['A. Dalusag', 'Batas Dao', 'Kaymisas', 'Poblacion I', 'Tabora'],
+    'General Mariano Alvarez' => ['Aldiano Olaes', 'Benjamin Tirona', 'Francisco Reyes', 'Severino de las Alas', 'Tiniente Tiago'],
+    'General Trias' => ['Bagumbayan', 'Biclatan', 'Manggahan', 'Pasong Camachile II', 'San Francisco'],
+    'Imus' => ['Alapan I-A', 'Anabu I-C', 'Bucandala III', 'Malagasang I-C', 'Tanzang Luma I'],
+    'Indang' => ['Alulod', 'Buna Cerca', 'Kayquit I', 'Poblacion 1', 'Tuy'],
+    'Kawit' => ['Binakayan-Aplaya', 'Binakayan-Kanluran', 'Gahak', 'Kaingen', 'Poblacion'],
+    'Magallanes' => ['Baliwag', 'Medina', 'Pacheco', 'Poblacion 1', 'Urdaneta'],
+    'Maragondon' => ['Bucal I', 'Caingin Poblacion', 'Garita A', 'Mabato', 'Patungan'],
+    'Mendez' => ['Anuling Cerca I', 'Asisan', 'Galicia I', 'Palocpoc I', 'Poblacion I'],
+    'Naic' => ['Bagong Karsada', 'Halang', 'Ibayo Estacion', 'Labac', 'Sabang'],
+    'Noveleta' => ['Magdiwang', 'Poblacion', 'Salcedo I', 'San Jose I', 'San Rafael III'],
+    'Rosario' => ['Bagbag I', 'Kanluran', 'Ligtong I', 'Silangan I', 'Tejeros Convention'],
+    'Silang' => ['Adlas', 'Biga I', 'Bucal', 'Iba', 'Tubuan I'],
+    'Tagaytay' => ['Asisan', 'Calabuso', 'Kaybagal South', 'Maharlika West', 'Tolentino East'],
+    'Tanza' => ['Amaya I', 'Bagtas', 'Daang Amaya I', 'Paradahan I', 'Sahud Ulan'],
+    'Ternate' => ['Bucana', 'Poblacion I', 'Poblacion II', 'San Jose', 'Sapang I'],
+    'Trece Martires' => ['Aguado', 'Cabezas', 'Hugo Perez', 'Lapidario', 'San Agustin'],
+];

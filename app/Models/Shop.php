@@ -82,6 +82,11 @@ class Shop extends Model
         return $this->hasMany(ShopProject::class);
     }
 
+    public function reviews()
+    {
+        return $this->hasMany(Review::class);
+    }
+
     public function getNameAttribute(): string
     {
         return (string) $this->shop_name;

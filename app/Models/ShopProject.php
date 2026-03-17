@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class ShopProject extends Model
 {
     protected $fillable = [
-        'shop_id','created_by','title','description','category','base_price','min_order_qty','turnaround_days','is_customizable','is_active','preview_image_path','default_fulfillment_type','automation_profile_json','tags_json'
+        'shop_id','created_by','title','description','embroidery_size','canvas_used','category','base_price','min_order_qty','turnaround_days','is_customizable','is_active','preview_image_path','default_fulfillment_type','automation_profile_json','tags_json'
     ];
 
     protected function casts(): array

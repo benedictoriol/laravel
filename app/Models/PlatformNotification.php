@@ -11,8 +11,11 @@ class PlatformNotification extends Model
     protected $fillable = [
         'user_id',
         'type',
+        'category',
+        'priority',
         'title',
         'message',
+        'action_label',
         'reference_type',
         'reference_id',
         'channel',

@@ -9,12 +9,15 @@ use App\Models\OrderStageHistory;
 use App\Models\Payment;
 use App\Models\PlatformNotification;
 use App\Services\AnalyticsAutomationService;
+use App\Services\ProductionOrchestrationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class PaymentController extends Controller
 {
+    public function __construct(protected ProductionOrchestrationService $production) {}
+
     public function index(Request $request): JsonResponse
     {
         $query = Payment::query()->with(['order', 'client', 'shop', 'confirmer']);
@@ -146,16 +149,23 @@ class PaymentController extends Controller
             PlatformNotification::create([
                 'user_id' => $payment->client_user_id,
                 'type' => 'payment_confirmed',
+                'category' => 'payments',
+                'priority' => 'medium',
                 'title' => 'Payment confirmed',
                 'message' => 'Your payment for order '.$order->order_number.' has been confirmed.',
+                'action_label' => 'Track order',
                 'reference_type' => 'payment',
                 'reference_id' => $payment->id,
                 'channel' => 'web',
             ]);
         });
 
-        app(AnalyticsAutomationService::class)->refreshForOrder($payment->order()->first(), 'payment_confirmed');
+        $freshOrder = $payment->order()->first();
+        if ($freshOrder && $payment->payment_status === 'confirmed') {
+            $this->production->orchestrateAfterPayment($freshOrder, $user);
+        }
 
+        app(AnalyticsAutomationService::class)->refreshForOrder($freshOrder, 'payment_confirmed');
 
         return response()->json($payment->fresh(['order', 'client', 'shop', 'confirmer']));
     }

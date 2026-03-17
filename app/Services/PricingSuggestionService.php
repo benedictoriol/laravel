@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\OwnerSetting;
 use App\Models\PriceSuggestionRule;
 use App\Models\ShopService;
 
@@ -31,16 +32,34 @@ class PricingSuggestionService
             $stitches = (int) round(max(($area * $density) + ($colors * 250), 1200));
         }
 
+        $ownerSettings = $shopService?->shop_id ? OwnerSetting::query()->where('shop_id', $shopService->shop_id)->first() : null;
+        $pricingRules = $ownerSettings?->pricing_rules_json ?? [];
+        $automationControls = $ownerSettings?->quote_automation_controls_json ?? [];
+
         $baseUnit = $shopService ? (float) $shopService->base_price : 120.0;
         $sizeMultiplier = max(($width * $height) / 6400, 0.75);
+        foreach (($pricingRules['size_rules'] ?? []) as $sizeRule) {
+            if (!empty($sizeRule['max_dimensions']) && preg_match('/(\d+)\s*[xX]\s*(\d+)/', (string) $sizeRule['max_dimensions'], $m)) {
+                if ($width <= (float) $m[1] && $height <= (float) $m[2]) {
+                    $sizeMultiplier = max($sizeMultiplier, (float) ($sizeRule['multiplier'] ?? 1));
+                    break;
+                }
+            }
+        }
         $stitchFactor = max($stitches / 5000, 0.8);
+        $colorRuleSet = $pricingRules['color_rules'] ?? [];
+        $colorRule = $colors <= 3 ? ($colorRuleSet['1_3'] ?? []) : ($colors <= 6 ? ($colorRuleSet['4_6'] ?? []) : ($colorRuleSet['7_plus'] ?? []));
         $colorFactor = 1 + max($colors - 1, 0) * 0.06;
-        $complexityFactor = match ($complexity) {
+        $colorExtra = ((float) ($colorRule['extra_cost_per_color'] ?? 0)) * max($colors - 1, 0);
+        $premiumThreadSurcharge = !empty($payload['premium_thread']) ? (float) ($colorRule['premium_thread_surcharge'] ?? 0) : 0;
+        $complexityRule = collect($pricingRules['complexity_rules'] ?? [])->firstWhere('level', $complexity);
+        $complexityFactor = (float) (($complexityRule['stitch_multiplier'] ?? null) ?: match ($complexity) {
             'simple' => 0.9,
+            'moderate' => 1.0,
             'complex' => 1.3,
-            'premium' => 1.6,
+            'highly_complex', 'premium' => 1.6,
             default => 1.0,
-        };
+        });
 
         $fabricFactor = match (true) {
             str_contains($fabricType, 'fleece'), str_contains($fabricType, 'hoodie') => 1.10,
@@ -62,8 +81,18 @@ class PricingSuggestionService
         $subtotalBeforeRules = round($basePrice * $quantity * $quantityDiscount, 2);
         $subtotal = $subtotalBeforeRules;
         $digitizingFee = $stitches > 12000 ? 420 : ($stitches > 9000 ? 350 : 200);
-        $rushFee = $rush ? round($subtotal * 0.15, 2) : 0;
-        $materialFee = round($quantity * max($colors, 1) * 4.5, 2);
+        if ($complexityRule) {
+            $digitizingFee = round($digitizingFee * max((float) ($complexityRule['digitizing_multiplier'] ?? 1), 0), 2);
+        }
+        $rushConfig = $pricingRules['rush_rules'] ?? [];
+        $rushMultiplier = $rush ? (float) (($rushConfig['24_hour_rush']['multiplier'] ?? null) ?: ($shopService?->rush_multiplier ?? 1.15)) : 0;
+        $rushFee = $rush ? round($subtotal * max($rushMultiplier - 1, 0.01), 2) : 0;
+        $materialFee = round($quantity * max($colors, 1) * 4.5, 2) + $colorExtra + $premiumThreadSurcharge;
+        foreach (($pricingRules['material_surcharges'] ?? []) as $materialRule) {
+            if (!empty($payload[$materialRule['key'] ?? ''])) {
+                $materialFee += (float) ($materialRule['amount'] ?? 0);
+            }
+        }
         $adjustments = [];
 
         $rules = PriceSuggestionRule::query()->where('is_active', true)->orderByDesc('priority')->get();
@@ -93,7 +122,16 @@ class PricingSuggestionService
             $subtotal += $delta;
         }
 
-        $total = round($subtotal + $digitizingFee + $materialFee + $rushFee, 2);
+        $laborFee = !empty($automationControls['auto_add_labor_estimate']) ? round(($ownerSettings?->default_labor_rate ?? 0) * max($quantity, 1), 2) : 0;
+        $shippingFee = !empty($automationControls['auto_add_shipping_estimate']) && ($payload['fulfillment_type'] ?? null) === 'delivery' ? 150 : 0;
+        $discountRules = $pricingRules['discount_rules'] ?? [];
+        $discountAmount = 0;
+        foreach (($discountRules['bulk_discounts'] ?? []) as $discountRule) {
+            if ($quantity >= (int) ($discountRule['min_qty'] ?? PHP_INT_MAX)) {
+                $discountAmount = max($discountAmount, round(($subtotal * ((float) ($discountRule['percent'] ?? 0) / 100)), 2));
+            }
+        }
+        $total = round(max(($ownerSettings?->minimum_billable_amount ?? 0), $subtotal + $digitizingFee + $materialFee + ($automationControls['auto_add_rush_fee'] ?? true ? $rushFee : 0) + $laborFee + $shippingFee - $discountAmount), 2);
         $confidence = 72;
         $confidence += !empty($payload['artwork_path']) ? 8 : 0;
         $confidence += !empty($payload['width_mm']) && !empty($payload['height_mm']) ? 5 : 0;
@@ -113,6 +151,9 @@ class PricingSuggestionService
             'digitizing_fee' => $digitizingFee,
             'material_fee' => $materialFee,
             'rush_fee' => $rushFee,
+            'labor_fee' => $laborFee,
+            'shipping_fee' => $shippingFee,
+            'discount_amount' => $discountAmount,
             'suggested_total' => $total,
             'stitch_count_estimate' => $stitches,
             'color_count' => $colors,

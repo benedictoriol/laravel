@@ -17,11 +17,7 @@
           <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-stone-900 text-sm font-semibold text-white">
             {{ initials }}
           </div>
-        </div>
-        <button type="button" class="rounded-2xl border border-stone-300 px-4 py-2.5 text-sm font-medium text-stone-700 transition hover:bg-stone-50" @click="$emit('profile')">
-          Profile
-        </button>
-        <button type="button" class="rounded-2xl bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-stone-800" @click="$emit('logout')">
+        </div>        <button type="button" class="rounded-2xl bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-stone-800" @click="$emit('logout')">
           Logout
         </button>
       </div>
@@ -39,7 +35,7 @@ const props = defineProps({
   user: { type: Object, default: null },
 });
 
-defineEmits(['logout', 'profile']);
+defineEmits(['logout']);
 
 const initials = computed(() => {
   const name = props.user?.name || 'U';

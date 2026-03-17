@@ -45,6 +45,8 @@ class ShopServiceController extends Controller
             'stitch_range' => ['nullable', 'string', 'max:50'],
             'complexity_multiplier' => ['nullable', 'numeric', 'min:0'],
             'rush_fee_allowed' => ['nullable', 'boolean'],
+            'rush_multiplier' => ['nullable', 'numeric', 'min:0'],
+            'rush_multiplier' => ['nullable', 'numeric', 'min:0'],
             'turnaround_days' => ['nullable', 'integer', 'min:1'],
             'is_active' => ['nullable', 'boolean'],
         ]);
@@ -61,6 +63,7 @@ class ShopServiceController extends Controller
             'stitch_range' => $validated['stitch_range'] ?? null,
             'complexity_multiplier' => $validated['complexity_multiplier'] ?? 1,
             'rush_fee_allowed' => $validated['rush_fee_allowed'] ?? true,
+            'rush_multiplier' => $validated['rush_multiplier'] ?? 1.15,
             'turnaround_days' => $validated['turnaround_days'] ?? null,
             'is_active' => $validated['is_active'] ?? true,
         ]);
@@ -81,6 +84,7 @@ class ShopServiceController extends Controller
             'stitch_range' => ['nullable', 'string', 'max:50'],
             'complexity_multiplier' => ['nullable', 'numeric', 'min:0'],
             'rush_fee_allowed' => ['nullable', 'boolean'],
+            'rush_multiplier' => ['nullable', 'numeric', 'min:0'],
             'turnaround_days' => ['nullable', 'integer', 'min:1'],
             'is_active' => ['nullable', 'boolean'],
         ]);

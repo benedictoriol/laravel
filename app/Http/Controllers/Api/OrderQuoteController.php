@@ -9,9 +9,12 @@ use App\Models\OrderQuoteItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use App\Services\ProductionOrchestrationService;
 
 class OrderQuoteController extends Controller
 {
+    public function __construct(protected ProductionOrchestrationService $production) {}
+
     public function index(Request $request, Order $order)
     {
         $user = $request->user();
@@ -236,7 +239,7 @@ class OrderQuoteController extends Controller
             ], 422);
         }
 
-        DB::transaction(function () use ($quote, $order) {
+        DB::transaction(function () use ($quote, $order, $user) {
             OrderQuote::where('order_id', $order->id)
                 ->where('id', '!=', $quote->id)
                 ->whereIn('status', ['draft', 'sent'])
@@ -252,6 +255,47 @@ class OrderQuoteController extends Controller
                 'approved_quote_id' => $quote->id,
                 'latest_quote_id' => $quote->id,
                 'approved_at' => now(),
+                'current_stage' => 'payment_waiting',
+                'payment_due_date' => now()->addDays(2),
+            ]);
+
+            $paymentAmount = round(((float) $quote->total_amount) * 0.5, 2);
+            if (! $order->payments()->where('payment_type', 'downpayment')->whereIn('payment_status', ['pending', 'submitted', 'confirmed'])->exists()) {
+                $order->payments()->create([
+                    'client_user_id' => $order->client_user_id,
+                    'shop_id' => $order->shop_id,
+                    'payment_type' => 'downpayment',
+                    'method' => 'manual',
+                    'amount' => $paymentAmount,
+                    'payment_status' => 'pending',
+                    'notes' => 'Auto-created after quote acceptance.',
+                ]);
+            }
+
+            PlatformNotification::create([
+                'user_id' => $order->client_user_id,
+                'type' => 'quote_accepted',
+                'category' => 'quotes',
+                'priority' => 'medium',
+                'title' => 'Quote accepted',
+                'message' => 'You accepted quote '.$quote->quote_number.'. Please complete the required payment.',
+                'action_label' => 'View payment',
+                'reference_type' => 'order_quote',
+                'reference_id' => $quote->id,
+                'channel' => 'web',
+            ]);
+
+            PlatformNotification::create([
+                'user_id' => optional($order->shop)->owner_user_id,
+                'type' => 'quote_accepted',
+                'category' => 'quotes',
+                'priority' => 'medium',
+                'title' => 'Client accepted quote',
+                'message' => 'Order '.$order->order_number.' is ready for payment follow-up.',
+                'action_label' => 'Open order',
+                'reference_type' => 'order_quote',
+                'reference_id' => $quote->id,
+                'channel' => 'web',
             ]);
         });
 
@@ -287,6 +331,22 @@ class OrderQuoteController extends Controller
             'status' => 'rejected',
             'client_response_notes' => $validated['client_response_notes'] ?? null,
             'responded_at' => now(),
+        ]);
+
+        $order->update(['status' => 'quoted']);
+        $this->production->routeException($order, 'quote_rejected', 'Client requested quote revision. '.($validated['client_response_notes'] ?? ''), 'medium');
+
+        PlatformNotification::create([
+            'user_id' => optional($order->shop)->owner_user_id,
+            'type' => 'quote_rejected',
+            'category' => 'quotes',
+            'priority' => 'high',
+            'title' => 'Quote needs revision',
+            'message' => 'Client rejected quote '.$quote->quote_number.'.',
+            'action_label' => 'Revise quote',
+            'reference_type' => 'order_quote',
+            'reference_id' => $quote->id,
+            'channel' => 'web',
         ]);
 
         return response()->json([

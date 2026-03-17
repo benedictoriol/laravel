@@ -3,6 +3,11 @@
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\BargainingOfferController;
 use App\Http\Controllers\Api\ClientProfileController;
+use App\Http\Controllers\Api\Client\ClientMessageController;
+use App\Http\Controllers\Api\Client\ClientPaymentMethodController;
+use App\Http\Controllers\Api\Client\ClientWorkspaceController;
+use App\Http\Controllers\Api\Client\SupportTicketController as ClientSupportTicketController;
+use App\Http\Controllers\Api\Owner\SupportTicketController as OwnerSupportTicketController;
 use App\Http\Controllers\Api\DesignCustomizationController;
 use App\Http\Controllers\Api\DesignProofController;
 use App\Http\Controllers\Api\AuthController;
@@ -24,7 +29,10 @@ use App\Http\Controllers\Api\ShopProjectController;
 use App\Http\Controllers\Api\SmartOpsController;
 use App\Http\Controllers\Api\ShopServiceController;
 use App\Http\Controllers\Api\Owner\DisputeCaseController;
+use App\Http\Controllers\Api\Owner\OwnerActionController;
+use App\Http\Controllers\Api\Owner\CourierController;
 use App\Http\Controllers\Api\Owner\MessageThreadController;
+use App\Http\Controllers\Api\Owner\OwnerPricingController;
 use App\Http\Controllers\Api\Owner\OwnerSettingsController;
 use App\Http\Controllers\Api\Owner\OwnerWorkspaceController;
 use App\Http\Controllers\Api\Owner\QualityCheckController;
@@ -44,6 +52,23 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
 
     Route::get('/analytics/shops/{shop}/metrics', [AnalyticsController::class, 'shopMetrics']);
+
+    Route::prefix('client')->middleware('role:client')->group(function () {
+        Route::get('/workspace', [ClientWorkspaceController::class, 'index']);
+        Route::get('/payment-methods', [ClientPaymentMethodController::class, 'index']);
+        Route::post('/payment-methods', [ClientPaymentMethodController::class, 'store']);
+        Route::put('/payment-methods/{paymentMethod}', [ClientPaymentMethodController::class, 'update']);
+        Route::delete('/payment-methods/{paymentMethod}', [ClientPaymentMethodController::class, 'destroy']);
+
+        Route::get('/threads', [ClientMessageController::class, 'index']);
+        Route::post('/threads', [ClientMessageController::class, 'store']);
+        Route::post('/threads/{thread}/messages', [ClientMessageController::class, 'postMessage']);
+
+        Route::get('/support-tickets', [ClientSupportTicketController::class, 'index']);
+        Route::post('/support-tickets', [ClientSupportTicketController::class, 'store']);
+        Route::put('/support-tickets/{supportTicket}', [ClientSupportTicketController::class, 'update']);
+    });
+
     Route::post('/analytics/shops/{shop}/refresh', [AnalyticsController::class, 'refreshShopMetrics']);
     Route::get('/analytics/orders/{order}/risk', [AnalyticsController::class, 'orderRisk']);
     Route::get('/analytics/recommendations', [AnalyticsController::class, 'recommendations']);
@@ -52,6 +77,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/smart-ops/alerts/{alert}/resolve', [SmartOpsController::class, 'resolve']);
 
     Route::get('/client-profile', [ClientProfileController::class, 'show']);
+    Route::get('/client-profile/options', [ClientProfileController::class, 'options']);
     Route::put('/client-profile', [ClientProfileController::class, 'update']);
     Route::post('/client-profile/addresses', [ClientProfileController::class, 'storeAddress']);
     Route::put('/client-profile/addresses/{address}', [ClientProfileController::class, 'updateAddress']);
@@ -84,6 +110,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/shop-members', [ShopMemberController::class, 'index']);
     Route::post('/shop-members', [ShopMemberController::class, 'store']);
+    Route::put('/shop-members/{shopMember}', [ShopMemberController::class, 'update']);
 
     Route::get('/shop-services', [ShopServiceController::class, 'index']);
     Route::post('/shop-services', [ShopServiceController::class, 'store']);
@@ -164,10 +191,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/workspace', [OwnerWorkspaceController::class, 'index']);
         Route::get('/settings', [OwnerSettingsController::class, 'show']);
         Route::put('/settings', [OwnerSettingsController::class, 'update']);
+        Route::get('/pricing', [OwnerPricingController::class, 'show']);
+        Route::put('/pricing', [OwnerPricingController::class, 'update']);
 
         Route::get('/suppliers', [SupplierController::class, 'index']);
         Route::post('/suppliers', [SupplierController::class, 'store']);
         Route::put('/suppliers/{supplier}', [SupplierController::class, 'update']);
+
+        Route::get('/couriers', [CourierController::class, 'index']);
+        Route::post('/couriers', [CourierController::class, 'store']);
 
         Route::get('/raw-materials', [RawMaterialController::class, 'index']);
         Route::post('/raw-materials', [RawMaterialController::class, 'store']);
@@ -192,5 +224,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/threads', [MessageThreadController::class, 'index']);
         Route::post('/threads', [MessageThreadController::class, 'store']);
         Route::post('/threads/{thread}/messages', [MessageThreadController::class, 'postMessage']);
+
+        Route::post('/actions/orders/{order}/reassign-staff', [OwnerActionController::class, 'reassignStaff']);
+        Route::post('/actions/orders/{order}/approve-production-plan', [OwnerActionController::class, 'approveProductionPlan']);
+        Route::post('/actions/restock-requests', [OwnerActionController::class, 'createRestockRequest']);
+        Route::post('/actions/orders/{order}/follow-up-payment', [OwnerActionController::class, 'followUpPayment']);
+        Route::post('/actions/orders/{order}/escalate', [OwnerActionController::class, 'escalateOrder']);
+        Route::post('/actions/orders/{order}/pause', [OwnerActionController::class, 'pauseProduction']);
+        Route::post('/actions/orders/{order}/resume', [OwnerActionController::class, 'resumeProduction']);
+        Route::post('/actions/alerts/{alert}/resolve', [OwnerActionController::class, 'resolveAlert']);
+        Route::post('/actions/alerts/{alert}/snooze', [OwnerActionController::class, 'snoozeAlert']);
+        Route::post('/actions/orders/{order}/quality-checks', [OwnerActionController::class, 'createQualityCheck']);
+        Route::post('/actions/orders/{order}/package-ready', [OwnerActionController::class, 'markPackageReady']);
+        Route::post('/actions/orders/{order}/assign-courier', [OwnerActionController::class, 'assignCourier']);
+        Route::post('/actions/notifications/maintain', [OwnerActionController::class, 'maintainNotifications']);
     });
 });

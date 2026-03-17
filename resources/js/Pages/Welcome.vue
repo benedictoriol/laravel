@@ -45,14 +45,14 @@ async function submit() {
       const { data } = await window.axios.post('/api/auth/login', loginForm.value);
       window.localStorage.setItem('embro_token', data.token);
       applyApiToken(data.token);
-      window.location.href = data.redirect_role === 'owner' ? '/owner-dashboard' : '/dashboard';
+      window.location.href = data.redirect_role === 'owner' ? '/owner-dashboard' : (data.redirect_role === 'client' ? '/client-dashboard' : '/dashboard');
       return;
     }
 
     const { data } = await window.axios.post('/api/auth/register', registerForm.value);
     window.localStorage.setItem('embro_token', data.token);
     applyApiToken(data.token);
-    window.location.href = data.redirect_role === 'owner' ? '/owner-dashboard' : '/dashboard';
+    window.location.href = data.redirect_role === 'owner' ? '/owner-dashboard' : (data.redirect_role === 'client' ? '/client-dashboard' : '/dashboard');
   } catch (err) {
     error.value = err?.response?.data?.message || 'Unable to continue. Check the form and try again.';
   } finally {
