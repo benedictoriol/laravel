@@ -50,13 +50,44 @@ class ClientWorkspaceService
         try {
             $designQuery = DesignCustomization::query()->where('user_id', $user->id)->latest('id');
             if (Schema::hasTable('design_customizations')) {
-                $designCustomizations = $designQuery->get()->map(function (DesignCustomization $design) {
-                    $design->setAttribute('proof_history', collect());
-                    $design->setAttribute('version_history', collect());
-                    $design->setAttribute('activity_trail', collect());
+                $relations = [];
+                if (Schema::hasTable('design_proofs')) {
+                    $relations[] = 'proofs.generator:id,name';
+                    $relations[] = 'proofs.responder:id,name';
+                    $relations[] = 'approvedProof';
+                }
+                if (Schema::hasTable('design_customization_snapshots')) {
+                    $relations[] = 'snapshots.actor:id,name';
+                }
+                if (Schema::hasTable('design_workflow_events')) {
+                    $relations[] = 'workflowEvents.actor:id,name';
+                }
+                if (Schema::hasTable('design_production_packages')) {
+                    $relations[] = 'productionPackages.creator:id,name';
+                    $relations[] = 'latestProductionPackage';
+                }
+                if (Schema::hasTable('design_digitizing_jobs')) {
+                    $relations[] = 'digitizingJobs.digitizer:id,name';
+                    $relations[] = 'latestDigitizingJob.digitizer:id,name';
+                }
+                if (Schema::hasTable('design_machine_files')) {
+                    $relations[] = 'digitizingJobs.machineFiles.uploader:id,name';
+                    $relations[] = 'latestDigitizingJob.machineFiles.uploader:id,name';
+                }
+                $designCustomizations = $designQuery->with($relations)->get()->map(function (DesignCustomization $design) {
+                    $digitizingJobs = collect($design->digitizingJobs ?? []);
+                    $latestDigitizing = $design->latestDigitizingJob ?: $digitizingJobs->sortByDesc('id')->first();
+                    $machineFiles = $digitizingJobs->flatMap(fn ($job) => $job->machineFiles ?? [])->values();
+                    $design->setAttribute('proof_history', collect($design->proofs ?? [])->sortByDesc('proof_no')->values());
+                    $design->setAttribute('version_history', collect($design->snapshots ?? [])->sortByDesc('version_no')->values());
+                    $design->setAttribute('activity_trail', collect($design->workflowEvents ?? [])->sortByDesc('id')->values());
                     $design->setAttribute('quote_history', collect());
-                    $design->setAttribute('production_package_history', collect());
+                    $design->setAttribute('production_package_history', collect($design->productionPackages ?? [])->sortByDesc('id')->values());
                     $design->setAttribute('risk_flag_count', count($design->risk_flags_json ?? []));
+                    $design->setAttribute('latest_digitizing_job', $latestDigitizing);
+                    $design->setAttribute('digitizing_job_count', $digitizingJobs->count());
+                    $design->setAttribute('approved_machine_file_count', $machineFiles->where('approval_state', 'approved')->count());
+                    $design->setAttribute('machine_file_count', $machineFiles->count());
                     return $design;
                 });
             }
@@ -160,7 +191,7 @@ class ClientWorkspaceService
                 'stats' => [
                     'pending_quotes' => $designCustomizations->filter(fn ($item) => in_array($item->status, ['draft', 'estimated', 'proof_ready', 'submitted']))->count(),
                     'unpaid_partial_orders' => $orders->filter(fn ($order) => in_array($order->payment_status, ['unpaid', 'partial'], true))->count(),
-                    'design_approvals_needed' => $designCustomizations->flatMap->proofs->where('status', 'pending_client')->count(),
+                    'design_approvals_needed' => $designCustomizations->sum(fn ($item) => collect($item->proof_history ?? $item->proofs ?? [])->where('status', 'pending_client')->count()),
                     'delivery_tracking' => $orders->filter(fn ($order) => in_array(optional($order->fulfillment)->status, ['ready', 'scheduled', 'shipped', 'out_for_delivery'], true))->count(),
                 ],
                 'active_journey' => $orders->first()?->trust,

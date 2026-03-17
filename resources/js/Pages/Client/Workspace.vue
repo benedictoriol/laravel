@@ -534,6 +534,13 @@ function errorMessage(err) {
   }
   return err?.response?.data?.message || 'Something went wrong.';
 }
+function designProgressLabel(item) {
+  if (!item) return 'Draft in progress';
+  if (item.digitizing_status === 'approved_for_machine' || item.machine_file_status === 'approved') return 'Production preparation';
+  if (['pending_digitizing', 'in_digitizing', 'digitized', 'revision_required'].includes(item.digitizing_status)) return 'Digitizing in progress';
+  if (item.approved_proof_id || item.workflow_status === 'approved' || item.status === 'approved') return 'Proof approved';
+  return 'Draft in progress';
+}
 function api(method, url, data = undefined, headers = {}) {
   applyApiToken(token.value);
   return window.axios({ method, url, data, headers });
@@ -1714,6 +1721,12 @@ onBeforeUnmount(() => {
                       <div>Approved: <span class="font-medium text-stone-900">{{ request.approved_version_no ? `#${request.approved_version_no}` : '—' }}</span></div>
                       <div>Proofs: <span class="font-medium text-stone-900">{{ request.proof_history?.length || request.proofs?.length || 0 }}</span></div>
                       <div>Packages: <span class="font-medium text-stone-900">{{ request.production_package_history?.length || request.production_packages?.length || 0 }}</span></div>
+                    </div>
+                    <div class="mt-3 flex flex-wrap gap-2 text-xs text-stone-600">
+                      <span class="rounded-full border border-stone-300 bg-white px-2.5 py-1">{{ designProgressLabel(request) }}</span>
+                      <span class="rounded-full border border-stone-300 bg-white px-2.5 py-1">Digitizing: {{ request.digitizing_status || 'Not started' }}</span>
+                      <span class="rounded-full border border-stone-300 bg-white px-2.5 py-1">Machine files: {{ request.machine_file_status || 'Awaiting upload' }}</span>
+                      <span class="rounded-full border border-stone-300 bg-white px-2.5 py-1">Approved machine files: {{ request.approved_machine_file_count || 0 }}</span>
                     </div>
                   </div>
                   <div class="flex flex-wrap gap-2">

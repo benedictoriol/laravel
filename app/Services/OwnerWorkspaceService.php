@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\DesignCustomization;
+use App\Models\DesignDigitizingJob;
+use App\Models\DesignMachineFile;
 use App\Models\DisputeCase;
 use App\Models\MessageThread;
 use App\Models\OperationalAlert;
@@ -24,6 +26,8 @@ use App\Models\SupplyOrder;
 use App\Models\User;
 use App\Models\WorkforceSchedule;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class OwnerWorkspaceService
 {
@@ -72,28 +76,50 @@ class OwnerWorkspaceService
         $couriers = ShopCourier::query()->where('shop_id', $shop->id)->latest('id')->get();
         $supportTickets = SupportTicket::query()->with(['user:id,name', 'order:id,order_number,current_stage,status', 'assignee:id,name'])->where('shop_id', $shop->id)->latest('id')->limit(80)->get();
 
-        $proofRequests = DesignCustomization::query()
-            ->with(['user:id,name', 'designPost.selectedShop:id,shop_name', 'order:id,order_number,shop_id,deadline,due_date,status,current_stage', 'proofs.generator:id,name', 'proofs.responder:id,name', 'approvedProof', 'snapshots.actor:id,name', 'workflowEvents.actor:id,name', 'productionPackages.creator:id,name', 'latestProductionPackage'])
-            ->where(function ($query) use ($shop) {
-                $query->whereHas('order', fn ($orderQuery) => $orderQuery->where('shop_id', $shop->id))
-                    ->orWhereHas('designPost', fn ($postQuery) => $postQuery->where('selected_shop_id', $shop->id));
-            })
-            ->latest('id')
-            ->limit(80)
-            ->get()
-            ->map(function ($item) use ($services) {
-                $service = $services->firstWhere('category', ($item->design_type ?? '')) ?? $services->first();
-                $estimate = $this->pricing->estimate($item->toArray(), $service);
-                $item->setAttribute('suggested_quote', $item->estimated_total_price ?: ($estimate['suggested_total'] ?? 0));
-                $item->setAttribute('pricing_breakdown_preview', $item->pricing_breakdown_json ?: $estimate);
-                $item->setAttribute('proof_history_count', $item->proofs->count());
-                $item->setAttribute('revision_count', $item->workflowEvents->where('event_type', 'revision_requested')->count());
-                $item->setAttribute('latest_activity', $item->workflowEvents->sortByDesc('id')->first());
-                $item->setAttribute('production_package_count', $item->productionPackages->count());
-                $item->setAttribute('risk_flag_count', count($item->risk_flags_json ?? []));
-                $item->setAttribute('latest_package', $item->latestProductionPackage);
-                return $item;
-            });
+        $proofRequests = collect();
+        try {
+            $proofRelations = ['user:id,name', 'designPost.selectedShop:id,shop_name', 'order:id,order_number,shop_id,deadline,due_date,status,current_stage', 'proofs.generator:id,name', 'proofs.responder:id,name', 'approvedProof', 'snapshots.actor:id,name', 'workflowEvents.actor:id,name', 'productionPackages.creator:id,name', 'latestProductionPackage'];
+            if (Schema::hasTable('design_digitizing_jobs')) {
+                $proofRelations[] = 'digitizingJobs.digitizer:id,name';
+                $proofRelations[] = 'latestDigitizingJob.digitizer:id,name';
+            }
+            if (Schema::hasTable('design_machine_files')) {
+                $proofRelations[] = 'digitizingJobs.machineFiles.uploader:id,name';
+                $proofRelations[] = 'latestDigitizingJob.machineFiles.uploader:id,name';
+            }
+
+            $proofRequests = DesignCustomization::query()
+                ->with($proofRelations)
+                ->where(function ($query) use ($shop) {
+                    $query->whereHas('order', fn ($orderQuery) => $orderQuery->where('shop_id', $shop->id))
+                        ->orWhereHas('designPost', fn ($postQuery) => $postQuery->where('selected_shop_id', $shop->id));
+                })
+                ->latest('id')
+                ->limit(80)
+                ->get()
+                ->map(function ($item) use ($services) {
+                    $service = $services->firstWhere('category', ($item->design_type ?? '')) ?? $services->first();
+                    $estimate = $this->pricing->estimate($item->toArray(), $service);
+                    $digitizingJobs = collect($item->digitizingJobs ?? []);
+                    $machineFiles = $digitizingJobs->flatMap(fn ($job) => $job->machineFiles ?? [])->values();
+                    $latestDigitizing = $item->latestDigitizingJob ?: $digitizingJobs->sortByDesc('id')->first();
+                    $item->setAttribute('suggested_quote', $item->estimated_total_price ?: ($estimate['suggested_total'] ?? 0));
+                    $item->setAttribute('pricing_breakdown_preview', $item->pricing_breakdown_json ?: $estimate);
+                    $item->setAttribute('proof_history_count', $item->proofs->count());
+                    $item->setAttribute('revision_count', $item->workflowEvents->where('event_type', 'revision_requested')->count());
+                    $item->setAttribute('latest_activity', $item->workflowEvents->sortByDesc('id')->first());
+                    $item->setAttribute('production_package_count', $item->productionPackages->count());
+                    $item->setAttribute('risk_flag_count', count($item->risk_flags_json ?? []));
+                    $item->setAttribute('latest_package', $item->latestProductionPackage);
+                    $item->setAttribute('digitizing_job_count', $digitizingJobs->count());
+                    $item->setAttribute('latest_digitizing_job', $latestDigitizing);
+                    $item->setAttribute('approved_machine_file_count', $machineFiles->where('approval_state', 'approved')->count());
+                    $item->setAttribute('machine_file_count', $machineFiles->count());
+                    return $item;
+                });
+        } catch (Throwable $e) {
+            $proofRequests = collect();
+        }
 
         $confirmedPayments = $payments->where('payment_status', 'confirmed');
         $delayPredictions = $orders->map(fn (Order $order) => $this->production->scanOrderHealth($order))->values();

@@ -102,6 +102,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/design-customizations/{designCustomization}/owner-proof', [DesignWorkflowController::class, 'ownerCreateProof']);
     Route::post('/design-customizations/{designCustomization}/production-status', [DesignWorkflowController::class, 'updateOperationalStatus']);
     Route::post('/design-customizations/{designCustomization}/production-package', [DesignWorkflowController::class, 'createProductionPackage']);
+    Route::post('/design-customizations/{designCustomization}/digitizing/mark-needed', [DesignWorkflowController::class, 'markNeedsDigitizing']);
+    Route::post('/design-customizations/{designCustomization}/digitizing/update', [DesignWorkflowController::class, 'updateDigitizing']);
+    Route::post('/design-customizations/{designCustomization}/digitizing/request-redigitizing', [DesignWorkflowController::class, 'requestRedigitizing']);
+    Route::post('/design-customizations/{designCustomization}/machine-files', [DesignWorkflowController::class, 'uploadMachineFile']);
+    Route::post('/design-customizations/{designCustomization}/machine-files/{machineFile}/approve', [DesignWorkflowController::class, 'approveMachineFile']);
     Route::post('/design-customizations/{designCustomization}/unlock', [DesignWorkflowController::class, 'unlockDesign']);
 
     Route::get('/shop-projects', [ShopProjectController::class, 'index']);

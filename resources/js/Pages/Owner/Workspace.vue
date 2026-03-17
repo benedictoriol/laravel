@@ -130,6 +130,56 @@ async function markReadyForDigitizing(item) {
     await load();
   } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
 }
+async function createDigitizingJob(item) {
+  const notes = window.prompt('Digitizing notes for this design:', item.notes || '');
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/digitizing/mark-needed`, { digitizing_notes: notes || `Digitizing opened for ${item.name}.` });
+    setFlash('Digitizing workflow opened.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function updateDigitizingStatus(item, status) {
+  const notes = window.prompt(`Update digitizing status to ${status.replaceAll('_', ' ')}:`, item.latest_digitizing_job?.digitizing_notes || '');
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/digitizing/update`, { status, digitizing_notes: notes || '' });
+    setFlash('Digitizing status updated.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function uploadMachineFileMeta(item) {
+  const fileType = (window.prompt('Machine file type (DST, PES, EXP, JEF, VP3, HUS, XXX):', 'DST') || '').toUpperCase();
+  if (!fileType) return;
+  const fileName = window.prompt('Machine file name:', `${(item.name || 'design').replace(/\s+/g, '_').toLowerCase()}.${fileType.toLowerCase()}`) || '';
+  const filePath = window.prompt('Machine file path or storage reference (optional):', '') || '';
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/machine-files`, { file_type: fileType, file_name: fileName, file_path: filePath, file_meta_json: { uploaded_from: 'owner_workspace' } });
+    setFlash('Machine file metadata uploaded.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function approveLatestMachineFile(item) {
+  const file = item.latest_digitizing_job?.machine_files?.find((row) => row.approval_state === 'pending_review') || item.latest_digitizing_job?.machine_files?.[0];
+  if (!file) { setFlash('No machine file available to approve.', 'error'); return; }
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/machine-files/${file.id}/approve`, {});
+    setFlash('Machine file approved.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function requestRedigitizing(item) {
+  const reason = window.prompt('Reason for re-digitizing this design:');
+  if (!reason) return;
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/digitizing/request-redigitizing`, { reason });
+    setFlash('Re-digitizing requested.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
 async function markReadyForProduction(item) {
   saving.value = true;
   try {
@@ -511,16 +561,35 @@ onMounted(load);
                     <div class="font-semibold uppercase tracking-[0.16em] text-stone-500">Production readiness</div>
                     <div class="mt-2 flex flex-wrap gap-2">
                       <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">{{ item.production_status || 'Not staged' }}</span>
+                      <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">Digitizing: {{ item.digitizing_status || 'Not started' }}</span>
+                      <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">Machine files: {{ item.machine_file_status || 'Awaiting upload' }}</span>
                       <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">Risk flags: {{ item.risk_flag_count || 0 }}</span>
                       <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">Packages: {{ item.production_package_count || 0 }}</span>
                     </div>
                     <div v-if="item.color_mapping_json?.length" class="mt-2">Threads: {{ item.color_mapping_json.map((thread) => thread.thread_name).join(', ') }}</div>
+                    <div v-if="item.latest_digitizing_job" class="mt-3 rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">
+                      <div class="font-semibold uppercase tracking-[0.16em] text-stone-500">Digitizing workflow</div>
+                      <div class="mt-2 grid gap-2">
+                        <div>Status: <span class="font-medium text-stone-900">{{ item.latest_digitizing_job.status }}</span></div>
+                        <div>Approval: <span class="font-medium text-stone-900">{{ item.latest_digitizing_job.approval_state }}</span></div>
+                        <div>Digitizer: <span class="font-medium text-stone-900">{{ item.latest_digitizing_job.digitizer?.name || 'Unassigned' }}</span></div>
+                        <div>Revision count: <span class="font-medium text-stone-900">{{ item.latest_digitizing_job.revision_count || 0 }}</span></div>
+                        <div>Machine file count: <span class="font-medium text-stone-900">{{ item.machine_file_count || 0 }}</span></div>
+                        <div>Approved machine files: <span class="font-medium text-stone-900">{{ item.approved_machine_file_count || 0 }}</span></div>
+                      </div>
+                    </div>
                   </div>
                   <div class="mt-4 grid gap-2">
                     <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving" @click="createVersionSnapshot(item)">Save version checkpoint</button>
                     <button class="rounded-2xl bg-stone-900 px-3 py-2 text-sm font-medium text-white" :disabled="saving" @click="generateProof(item)">Generate proof for client</button>
                     <button class="rounded-2xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900" :disabled="saving || !['approved','proof_ready'].includes(item.status)" @click="lockApprovedDesign(item)">Lock approved design</button>
                     <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving" @click="markReadyForDigitizing(item)">Mark ready for digitizing</button>
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving" @click="createDigitizingJob(item)">Open digitizing workflow</button>
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving || !item.latest_digitizing_job" @click="updateDigitizingStatus(item, 'in_digitizing')">Mark in digitizing</button>
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving || !item.latest_digitizing_job" @click="updateDigitizingStatus(item, 'digitized')">Submit digitized result</button>
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving || !item.latest_digitizing_job" @click="uploadMachineFileMeta(item)">Upload machine file metadata</button>
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving || !item.latest_digitizing_job" @click="approveLatestMachineFile(item)">Approve latest machine file</button>
+                    <button class="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900" :disabled="saving || !item.latest_digitizing_job" @click="requestRedigitizing(item)">Request re-digitizing</button>
                     <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving" @click="markReadyForProduction(item)">Mark ready for production</button>
                     <button class="rounded-2xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-900" :disabled="saving" @click="createProductionPackage(item)">Create production package</button>
                     <button v-if="item.locked_at" class="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900" :disabled="saving" @click="unlockLockedDesign(item)">Unlock with override</button>

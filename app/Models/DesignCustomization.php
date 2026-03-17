@@ -40,12 +40,18 @@ class DesignCustomization extends Model
         'last_revision_requested_at',
         'locked_at',
         'production_status',
+        'digitizing_status',
+        'machine_file_status',
         'production_ready_at',
+        'digitizing_required_at',
+        'machine_ready_at',
         'latest_production_package_id',
+        'latest_digitizing_job_id',
         'color_mapping_json',
         'risk_flags_json',
         'suggested_quote_basis_json',
         'production_meta_json',
+        'digitizing_meta_json',
     ];
 
     protected function casts(): array
@@ -67,10 +73,13 @@ class DesignCustomization extends Model
             'last_revision_requested_at' => 'datetime',
             'locked_at' => 'datetime',
             'production_ready_at' => 'datetime',
+            'digitizing_required_at' => 'datetime',
+            'machine_ready_at' => 'datetime',
             'color_mapping_json' => 'array',
             'risk_flags_json' => 'array',
             'suggested_quote_basis_json' => 'array',
             'production_meta_json' => 'array',
+            'digitizing_meta_json' => 'array',
             'created_at' => 'datetime',
             'updated_at' => 'datetime',
         ];
@@ -85,6 +94,10 @@ class DesignCustomization extends Model
     public function workflowEvents() { return $this->hasMany(DesignWorkflowEvent::class); }
     public function productionPackages() { return $this->hasMany(DesignProductionPackage::class); }
     public function latestProductionPackage() { return $this->belongsTo(DesignProductionPackage::class, 'latest_production_package_id'); }
+    public function digitizingJobs() { return $this->hasMany(DesignDigitizingJob::class); }
+    public function latestDigitizingJob() { return $this->belongsTo(DesignDigitizingJob::class, 'latest_digitizing_job_id'); }
+    public function machineFiles() { return $this->hasMany(DesignMachineFile::class); }
 }
+
 
 

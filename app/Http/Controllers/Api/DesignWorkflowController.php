@@ -5,10 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\DesignCustomization;
 use App\Models\DesignCustomizationSnapshot;
+use App\Models\DesignDigitizingJob;
+use App\Models\DesignMachineFile;
 use App\Models\DesignProductionPackage;
 use App\Models\DesignProof;
 use App\Models\DesignWorkflowEvent;
 use App\Models\PlatformNotification;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -239,7 +242,10 @@ class DesignWorkflowController extends Controller
         ]);
 
         $isApprovedAndLocked = (int) ($designCustomization->approved_version_no ?: 0) > 0 && ! empty($designCustomization->locked_at);
+        $requiresDigitizing = in_array((string) ($designCustomization->production_status ?? ''), ['ready_for_digitizing','ready_for_production','approved_for_handoff','production_handed_off'], true) || ! empty($designCustomization->digitizing_status);
+        $hasApprovedMachineFile = Schema::hasTable('design_machine_files') && DesignMachineFile::query()->where('design_customization_id', $designCustomization->id)->where('approval_state', 'approved')->exists();
         abort_if(! $isApprovedAndLocked && empty($validated['override_reason']), 422, 'Production handoff requires an approved and locked design or an override reason.');
+        abort_if($requiresDigitizing && ! $hasApprovedMachineFile && empty($validated['override_reason']), 422, 'Production handoff requires an approved machine file when digitizing is required, unless an override reason is provided.');
 
         $fresh = $designCustomization->fresh();
         $phaseFour = $this->phaseFourComputedFields($fresh->toArray());
@@ -292,6 +298,257 @@ class DesignWorkflowController extends Controller
         ]);
 
         return response()->json($package->fresh('creator:id,name'));
+    }
+
+    public function markNeedsDigitizing(Request $request, DesignCustomization $designCustomization): JsonResponse
+    {
+        abort_unless($request->user()->isOwner() || $request->user()->isAdmin() || $request->user()->isHr() || $request->user()->isStaff(), 403);
+        abort_unless(Schema::hasTable('design_digitizing_jobs'), 422, 'Digitizing workflow tables are not available yet. Run migrations first.');
+
+        $validated = $request->validate([
+            'assigned_digitizer_user_id' => ['nullable', 'integer', 'exists:users,id'],
+            'digitizing_notes' => ['nullable', 'string'],
+            'override_reason' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $job = $this->resolveCurrentDigitizingJob($designCustomization);
+        if (! $job) {
+            $job = DesignDigitizingJob::create([
+                'design_customization_id' => $designCustomization->id,
+                'design_proof_id' => $designCustomization->approved_proof_id,
+                'order_id' => $designCustomization->order_id,
+                'assigned_digitizer_user_id' => $validated['assigned_digitizer_user_id'] ?? null,
+                'status' => 'pending_digitizing',
+                'digitizing_notes' => $validated['digitizing_notes'] ?? null,
+                'machine_file_status' => 'awaiting_upload',
+                'approval_state' => 'pending',
+            ]);
+            $eventType = 'digitizing_created';
+            $summary = 'Created digitizing job.';
+        } else {
+            $job->forceFill([
+                'assigned_digitizer_user_id' => $validated['assigned_digitizer_user_id'] ?? $job->assigned_digitizer_user_id,
+                'digitizing_notes' => $validated['digitizing_notes'] ?? $job->digitizing_notes,
+                'status' => in_array($job->status, ['approved_for_machine', 'rejected'], true) ? 'pending_digitizing' : $job->status,
+            ])->save();
+            $eventType = 'digitizing_updated';
+            $summary = 'Updated digitizing job.';
+        }
+
+        $meta = is_array($designCustomization->digitizing_meta_json ?? null) ? $designCustomization->digitizing_meta_json : [];
+        $meta['assigned_digitizer'] = $job->digitizer?->only(['id', 'name']);
+        $meta['override_reason'] = $validated['override_reason'] ?? ($meta['override_reason'] ?? null);
+        $meta['last_digitizing_update_at'] = now()->toIso8601String();
+
+        $designCustomization->forceFill([
+            'digitizing_status' => 'pending_digitizing',
+            'machine_file_status' => $job->machine_file_status ?: 'awaiting_upload',
+            'latest_digitizing_job_id' => $job->id,
+            'digitizing_required_at' => $designCustomization->digitizing_required_at ?: now(),
+            'production_status' => in_array($designCustomization->production_status, ['approved_for_handoff', 'ready_for_digitizing', null, ''], true) ? 'ready_for_digitizing' : $designCustomization->production_status,
+            'digitizing_meta_json' => $meta,
+        ])->save();
+
+        $this->recordEvent($designCustomization, $request->user()->id, $eventType, $summary, $validated['digitizing_notes'] ?? null, [
+            'digitizing_job_id' => $job->id,
+            'assigned_digitizer_user_id' => $job->assigned_digitizer_user_id,
+            'override_reason' => $validated['override_reason'] ?? null,
+        ]);
+
+        return response()->json($designCustomization->fresh($this->workflowRelations()));
+    }
+
+    public function updateDigitizing(Request $request, DesignCustomization $designCustomization): JsonResponse
+    {
+        abort_unless($request->user()->isOwner() || $request->user()->isAdmin() || $request->user()->isHr() || $request->user()->isStaff(), 403);
+        abort_unless(Schema::hasTable('design_digitizing_jobs'), 422, 'Digitizing workflow tables are not available yet. Run migrations first.');
+        $validated = $request->validate([
+            'status' => ['required', 'in:pending_digitizing,in_digitizing,digitized,revision_required,approved_for_machine,rejected'],
+            'digitizing_notes' => ['nullable', 'string'],
+            'assigned_digitizer_user_id' => ['nullable', 'integer', 'exists:users,id'],
+            'result_meta_json' => ['nullable', 'array'],
+        ]);
+
+        $job = $this->resolveCurrentDigitizingJob($designCustomization);
+        abort_if(! $job, 422, 'Mark the design as needing digitizing first.');
+
+        $meta = array_merge(is_array($job->result_meta_json ?? null) ? $job->result_meta_json : [], $validated['result_meta_json'] ?? []);
+        $approvalState = match ($validated['status']) {
+            'approved_for_machine' => 'approved',
+            'rejected' => 'rejected',
+            'revision_required' => 'revision_required',
+            'digitized' => 'under_review',
+            default => 'pending',
+        };
+        $machineFileStatus = $job->machine_file_status ?: 'awaiting_upload';
+        if (in_array($validated['status'], ['digitized', 'approved_for_machine'], true)) {
+            $machineFileStatus = $job->machineFiles()->exists() ? 'uploaded' : 'awaiting_upload';
+        }
+        if ($validated['status'] === 'approved_for_machine' && $job->machineFiles()->where('approval_state', 'approved')->exists()) {
+            $machineFileStatus = 'approved';
+        }
+
+        $job->forceFill([
+            'status' => $validated['status'],
+            'digitizing_notes' => $validated['digitizing_notes'] ?? $job->digitizing_notes,
+            'assigned_digitizer_user_id' => $validated['assigned_digitizer_user_id'] ?? $job->assigned_digitizer_user_id,
+            'result_meta_json' => $meta,
+            'approval_state' => $approvalState,
+            'machine_file_status' => $machineFileStatus,
+            'submitted_for_review_at' => $validated['status'] === 'digitized' ? now() : $job->submitted_for_review_at,
+            'approved_at' => $validated['status'] === 'approved_for_machine' ? now() : $job->approved_at,
+            'rejected_at' => $validated['status'] === 'rejected' ? now() : $job->rejected_at,
+        ])->save();
+
+        $designMeta = is_array($designCustomization->digitizing_meta_json ?? null) ? $designCustomization->digitizing_meta_json : [];
+        $designMeta['last_digitizing_update_at'] = now()->toIso8601String();
+        $designMeta['latest_result_meta'] = $meta;
+
+        $designCustomization->forceFill([
+            'digitizing_status' => $validated['status'],
+            'machine_file_status' => $machineFileStatus,
+            'latest_digitizing_job_id' => $job->id,
+            'machine_ready_at' => $validated['status'] === 'approved_for_machine' && $machineFileStatus === 'approved' ? now() : $designCustomization->machine_ready_at,
+            'production_status' => $validated['status'] === 'approved_for_machine' && $machineFileStatus === 'approved' ? 'ready_for_production' : 'ready_for_digitizing',
+            'digitizing_meta_json' => $designMeta,
+        ])->save();
+
+        $this->recordEvent($designCustomization, $request->user()->id, 'digitizing_updated', 'Updated digitizing status to '.str_replace('_', ' ', $validated['status']).'.', $validated['digitizing_notes'] ?? null, [
+            'digitizing_job_id' => $job->id,
+            'status' => $validated['status'],
+            'machine_file_status' => $machineFileStatus,
+        ]);
+
+        return response()->json($designCustomization->fresh($this->workflowRelations()));
+    }
+
+    public function uploadMachineFile(Request $request, DesignCustomization $designCustomization): JsonResponse
+    {
+        abort_unless($request->user()->isOwner() || $request->user()->isAdmin() || $request->user()->isHr() || $request->user()->isStaff(), 403);
+        abort_unless(Schema::hasTable('design_machine_files'), 422, 'Machine file tables are not available yet. Run migrations first.');
+        $validated = $request->validate([
+            'file_type' => ['required', 'in:DST,PES,EXP,JEF,VP3,HUS,XXX'],
+            'file_name' => ['nullable', 'string', 'max:255'],
+            'file_path' => ['nullable', 'string', 'max:255'],
+            'file_meta_json' => ['nullable', 'array'],
+        ]);
+
+        $job = $this->resolveCurrentDigitizingJob($designCustomization);
+        abort_if(! $job, 422, 'Create or mark a digitizing job first.');
+
+        $file = DesignMachineFile::create([
+            'design_digitizing_job_id' => $job->id,
+            'design_customization_id' => $designCustomization->id,
+            'design_version_no' => (int) ($designCustomization->approved_version_no ?: $designCustomization->current_version_no ?: 1),
+            'file_version' => ((int) $job->machineFiles()->max('file_version')) + 1,
+            'file_type' => strtoupper($validated['file_type']),
+            'file_name' => $validated['file_name'] ?? null,
+            'file_path' => $validated['file_path'] ?? null,
+            'uploaded_by' => $request->user()->id,
+            'approval_state' => 'pending_review',
+            'file_meta_json' => $validated['file_meta_json'] ?? [],
+        ]);
+
+        $job->forceFill([
+            'status' => in_array($job->status, ['pending_digitizing'], true) ? 'digitized' : $job->status,
+            'machine_file_status' => 'uploaded',
+            'submitted_for_review_at' => $job->submitted_for_review_at ?: now(),
+        ])->save();
+
+        $meta = is_array($designCustomization->digitizing_meta_json ?? null) ? $designCustomization->digitizing_meta_json : [];
+        $meta['latest_machine_file'] = ['id' => $file->id, 'file_type' => $file->file_type, 'file_name' => $file->file_name];
+        $designCustomization->forceFill([
+            'digitizing_status' => $job->status,
+            'machine_file_status' => 'uploaded',
+            'digitizing_meta_json' => $meta,
+        ])->save();
+
+        $this->recordEvent($designCustomization, $request->user()->id, 'machine_file_uploaded', 'Uploaded machine file '.$file->file_type.'.', $validated['file_name'] ?? null, [
+            'digitizing_job_id' => $job->id,
+            'machine_file_id' => $file->id,
+            'file_type' => $file->file_type,
+        ]);
+
+        return response()->json($file->fresh('uploader:id,name'));
+    }
+
+    public function approveMachineFile(Request $request, DesignCustomization $designCustomization, DesignMachineFile $machineFile): JsonResponse
+    {
+        abort_unless($request->user()->isOwner() || $request->user()->isAdmin() || $request->user()->isHr() || $request->user()->isStaff(), 403);
+        abort_if($machineFile->design_customization_id !== $designCustomization->id, 404);
+        $validated = $request->validate([
+            'override_reason' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $job = $this->resolveCurrentDigitizingJob($designCustomization);
+        abort_if(! $job, 422, 'Digitizing job not found.');
+
+        $machineFile->forceFill([
+            'approval_state' => 'approved',
+            'approved_at' => now(),
+        ])->save();
+        $job->machineFiles()->where('id', '!=', $machineFile->id)->where('approval_state', 'pending_review')->update(['approval_state' => 'superseded']);
+        $job->forceFill([
+            'status' => 'approved_for_machine',
+            'approval_state' => 'approved',
+            'machine_file_status' => 'approved',
+            'approved_at' => now(),
+        ])->save();
+
+        $meta = is_array($designCustomization->digitizing_meta_json ?? null) ? $designCustomization->digitizing_meta_json : [];
+        $meta['approved_machine_file'] = ['id' => $machineFile->id, 'file_type' => $machineFile->file_type, 'file_name' => $machineFile->file_name];
+        $meta['last_override_reason'] = $validated['override_reason'] ?? ($meta['last_override_reason'] ?? null);
+        $designCustomization->forceFill([
+            'digitizing_status' => 'approved_for_machine',
+            'machine_file_status' => 'approved',
+            'machine_ready_at' => now(),
+            'production_status' => 'ready_for_production',
+            'digitizing_meta_json' => $meta,
+        ])->save();
+
+        $this->recordEvent($designCustomization, $request->user()->id, 'machine_file_approved', 'Approved machine file '.$machineFile->file_type.' for production readiness.', null, [
+            'digitizing_job_id' => $job->id,
+            'machine_file_id' => $machineFile->id,
+            'override_reason' => $validated['override_reason'] ?? null,
+        ]);
+
+        return response()->json($designCustomization->fresh($this->workflowRelations()));
+    }
+
+    public function requestRedigitizing(Request $request, DesignCustomization $designCustomization): JsonResponse
+    {
+        abort_unless($request->user()->isOwner() || $request->user()->isAdmin() || $request->user()->isHr() || $request->user()->isStaff(), 403);
+        abort_unless(Schema::hasTable('design_digitizing_jobs'), 422, 'Digitizing workflow tables are not available yet. Run migrations first.');
+        $validated = $request->validate([
+            'reason' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $job = $this->resolveCurrentDigitizingJob($designCustomization);
+        abort_if(! $job, 422, 'Digitizing job not found.');
+
+        $job->forceFill([
+            'status' => 'revision_required',
+            'approval_state' => 'revision_required',
+            'revision_count' => (int) $job->revision_count + 1,
+            'digitizing_notes' => trim(($job->digitizing_notes ? $job->digitizing_notes."
+" : '').$validated['reason']),
+        ])->save();
+
+        $meta = is_array($designCustomization->digitizing_meta_json ?? null) ? $designCustomization->digitizing_meta_json : [];
+        $meta['last_revision_reason'] = $validated['reason'];
+        $designCustomization->forceFill([
+            'digitizing_status' => 'revision_required',
+            'machine_file_status' => 'revision_required',
+            'production_status' => 'ready_for_digitizing',
+            'digitizing_meta_json' => $meta,
+        ])->save();
+
+        $this->recordEvent($designCustomization, $request->user()->id, 'redigitizing_requested', 'Requested re-digitizing for the approved design.', $validated['reason'], [
+            'digitizing_job_id' => $job->id,
+            'revision_count' => $job->revision_count,
+        ]);
+
+        return response()->json($designCustomization->fresh($this->workflowRelations()));
     }
 
     public function unlockDesign(Request $request, DesignCustomization $designCustomization): JsonResponse
@@ -405,6 +662,8 @@ class DesignWorkflowController extends Controller
             'complexity_level' => $designCustomization->complexity_level,
             'thread_summary' => $designCustomization->color_mapping_json,
             'risk_flags' => $designCustomization->risk_flags_json,
+            'digitizing_status' => $designCustomization->digitizing_status,
+            'machine_file_status' => $designCustomization->machine_file_status,
             'notes' => $designCustomization->notes,
             'linked_order_id' => $designCustomization->order_id,
             'linked_design_post_id' => $designCustomization->design_post_id,
@@ -520,7 +779,24 @@ class DesignWorkflowController extends Controller
 
     protected function workflowRelations(): array
     {
-        return ['snapshots.actor', 'workflowEvents.actor', 'proofs.generator', 'proofs.responder', 'productionPackages.creator', 'latestProductionPackage'];
+        return ['snapshots.actor', 'workflowEvents.actor', 'proofs.generator', 'proofs.responder', 'productionPackages.creator', 'latestProductionPackage', 'digitizingJobs.digitizer', 'digitizingJobs.machineFiles.uploader', 'latestDigitizingJob.digitizer', 'latestDigitizingJob.machineFiles.uploader'];
+    }
+
+    protected function resolveCurrentDigitizingJob(DesignCustomization $designCustomization): ?DesignDigitizingJob
+    {
+        if (! Schema::hasTable('design_digitizing_jobs')) {
+            return null;
+        }
+
+        if (! empty($designCustomization->latest_digitizing_job_id)) {
+            return DesignDigitizingJob::query()->with(['digitizer:id,name', 'machineFiles.uploader:id,name'])->find($designCustomization->latest_digitizing_job_id);
+        }
+
+        return DesignDigitizingJob::query()
+            ->with(['digitizer:id,name', 'machineFiles.uploader:id,name'])
+            ->where('design_customization_id', $designCustomization->id)
+            ->latest('id')
+            ->first();
     }
 
     protected function authorizeView(DesignCustomization $designCustomization, $user): void
