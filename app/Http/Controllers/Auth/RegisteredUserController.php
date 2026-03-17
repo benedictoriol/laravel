@@ -6,52 +6,40 @@ use App\Http\Controllers\Controller;
 use App\Models\ClientProfile;
 use App\Models\User;
 use Illuminate\Auth\Events\Registered;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\Rules;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class RegisteredUserController extends Controller
 {
-    /**
-     * Display the registration view.
-     */
     public function create(): Response
     {
-        return Inertia::render('Welcome', [
-            'canLogin' => true,
-            'canRegister' => true,
-            'laravelVersion' => app()->version(),
-            'phpVersion' => PHP_VERSION,
-        ]);
+        return Inertia::render('Welcome');
     }
 
-    /**
-     * Handle an incoming registration request.
-     *
-     * @throws ValidationException
-     */
-    public function store(Request $request): RedirectResponse|\Illuminate\Http\JsonResponse
+    public function store(Request $request): RedirectResponse|JsonResponse
     {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|lowercase|email|max:255|unique:'.User::class,
-            'phone' => 'nullable|string|max:30',
-            'role' => 'nullable|in:client,owner',
-            'password' => ['required', 'confirmed', Rules\Password::defaults()],
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:'.User::class],
+            'password' => ['required', 'string', 'min:8'],
+            'phone' => ['nullable', 'string', 'max:30'],
+            'role' => ['nullable', Rule::in(['client', 'owner'])],
         ]);
 
         $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'phone' => $request->phone,
-            'role' => $request->input('role', 'client'),
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'password' => Hash::make($validated['password']),
+            'phone' => $validated['phone'] ?? null,
+            'role' => $validated['role'] ?? 'client',
             'is_active' => true,
-            'password' => Hash::make($request->password),
         ]);
 
         if ($user->role === 'client') {
@@ -63,19 +51,27 @@ class RegisteredUserController extends Controller
         Auth::login($user);
         $request->session()->regenerate();
 
-        $user->tokens()->delete();
         $token = $user->createToken('spa')->plainTextToken;
-        $redirectPath = $user->role === 'owner' ? '/owner-dashboard' : '/client-dashboard';
+        $redirect = $user->role === 'owner' ? '/owner-dashboard' : '/client-dashboard';
 
-        if ($request->expectsJson() || $request->wantsJson()) {
+        if ($request->expectsJson()) {
             return response()->json([
+                'message' => 'Account created successfully.',
                 'token' => $token,
-                'user' => $user,
                 'redirect_role' => $user->role,
-                'redirect_path' => $redirectPath,
+                'redirect' => $redirect,
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'role' => $user->role,
+                    'shop_id' => $user->shop_id,
+                    'phone' => $user->phone,
+                    'is_active' => $user->is_active,
+                ],
             ], 201);
         }
 
-        return redirect($redirectPath);
+        return redirect($redirect);
     }
 }

@@ -15,6 +15,8 @@ use App\Models\ShopProject;
 use App\Models\SupportTicket;
 use App\Models\User;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class ClientWorkspaceService
 {
@@ -25,10 +27,9 @@ class ClientWorkspaceService
 
     public function build(User $user): array
     {
-        $profile = ClientProfile::firstOrCreate(
-            ['user_id' => $user->id],
-            ['email' => $user->email, 'registration_date' => optional($user->created_at)->toDateString()]
-        )->load('addresses');
+        $profile = ClientProfile::firstOrCreate(['user_id' => $user->id]);
+        $this->syncProfileDefaults($profile, $user);
+        $profile->load('addresses');
 
         $orders = Order::query()
             ->with([
@@ -45,16 +46,23 @@ class ClientWorkspaceService
             ->latest('id')
             ->get();
 
-        $designCustomizations = DesignCustomization::query()
-            ->with(['designPost.selectedShop:id,shop_name', 'proofs', 'approvedProof', 'order.shop:id,shop_name', 'order.quotes'])
-            ->where('user_id', $user->id)
-            ->latest('id')
-            ->get()
-            ->map(function (DesignCustomization $design) {
-                $design->setAttribute('proof_history', $design->proofs->sortByDesc('id')->values());
-                $design->setAttribute('quote_history', optional($design->order)->quotes?->sortByDesc('id')->values() ?? collect());
-                return $design;
-            });
+        $designCustomizations = collect();
+        try {
+            $designQuery = DesignCustomization::query()->where('user_id', $user->id)->latest('id');
+            if (Schema::hasTable('design_customizations')) {
+                $designCustomizations = $designQuery->get()->map(function (DesignCustomization $design) {
+                    $design->setAttribute('proof_history', collect());
+                    $design->setAttribute('version_history', collect());
+                    $design->setAttribute('activity_trail', collect());
+                    $design->setAttribute('quote_history', collect());
+                    $design->setAttribute('production_package_history', collect());
+                    $design->setAttribute('risk_flag_count', count($design->risk_flags_json ?? []));
+                    return $design;
+                });
+            }
+        } catch (Throwable $e) {
+            $designCustomizations = collect();
+        }
 
         $paymentMethods = ClientPaymentMethod::query()->where('user_id', $user->id)->orderByDesc('is_default')->latest('id')->get();
         $projects = ShopProject::query()->with('shop:id,shop_name,verification_status')->where('is_active', true)->latest('id')->limit(50)->get();
@@ -65,18 +73,33 @@ class ClientWorkspaceService
         $projectShopIds = $projects->pluck('shop_id')->filter()->unique();
         $proposalShopIds = $myDesignRequests->pluck('selected_shop_id')->filter()->merge($myDesignRequests->flatMap(fn ($post) => $post->applications->pluck('shop_id')))->filter()->unique();
         $messagingShops = Shop::query()->whereIn('id', $previousShopIds->merge($projectShopIds)->merge($proposalShopIds)->unique()->values())->orderBy('shop_name')->get(['id', 'shop_name', 'email', 'phone']);
-        $threads = MessageThread::query()
-            ->with(['messages.sender:id,name'])
-            ->where(function ($query) use ($previousShopIds, $user) {
-                $query->whereIn('shop_id', $previousShopIds)
-                    ->orWhereJsonContains('participant_user_ids_json', $user->id);
-            })
-            ->where(function ($query) use ($user) {
+        $threadQuery = MessageThread::query()->with(['messages.sender:id,name']);
+        $hasParticipantJson = Schema::hasColumn('message_threads', 'participant_user_ids_json');
+
+        $threadQuery->where(function ($query) use ($previousShopIds, $user, $hasParticipantJson) {
+            $query->whereIn('shop_id', $previousShopIds);
+
+            if ($hasParticipantJson) {
+                $query->orWhereJsonContains('participant_user_ids_json', $user->id);
+            }
+        });
+
+        $threadQuery->where(function ($query) use ($user, $hasParticipantJson) {
+            if ($hasParticipantJson) {
                 $query->whereJsonContains('participant_user_ids_json', $user->id)
                     ->orWhereHas('order', fn ($orderQuery) => $orderQuery->where('client_user_id', $user->id));
-            })
-            ->latest('last_message_at')
-            ->get();
+
+                return;
+            }
+
+            $query->whereHas('order', fn ($orderQuery) => $orderQuery->where('client_user_id', $user->id));
+        });
+
+        try {
+            $threads = $threadQuery->latest('last_message_at')->get();
+        } catch (Throwable $e) {
+            $threads = collect();
+        }
 
         $supportTickets = SupportTicket::query()
             ->with(['shop:id,shop_name', 'order:id,order_number,current_stage,status', 'assignee:id,name'])
@@ -180,6 +203,23 @@ class ClientWorkspaceService
             'shops' => $approvedShops,
             'client_profile' => $profile,
         ];
+    }
+
+    protected function syncProfileDefaults(ClientProfile $profile, User $user): void
+    {
+        $updates = [];
+
+        if (Schema::hasColumn('client_profiles', 'email') && empty($profile->email) && ! empty($user->email)) {
+            $updates['email'] = $user->email;
+        }
+
+        if (Schema::hasColumn('client_profiles', 'registration_date') && empty($profile->registration_date) && $user->created_at) {
+            $updates['registration_date'] = $user->created_at->toDateString();
+        }
+
+        if (! empty($updates)) {
+            $profile->forceFill($updates)->save();
+        }
     }
 
     protected function buildOrderTabs(Collection $orders): array

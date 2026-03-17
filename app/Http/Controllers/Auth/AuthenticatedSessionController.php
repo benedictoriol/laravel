@@ -4,51 +4,45 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class AuthenticatedSessionController extends Controller
 {
-    /**
-     * Display the login view.
-     */
     public function create(): Response
     {
-        return Inertia::render('Welcome', [
-            'canLogin' => true,
-            'canRegister' => true,
-            'laravelVersion' => app()->version(),
-            'phpVersion' => PHP_VERSION,
-        ]);
+        return Inertia::render('Welcome');
     }
 
-    /**
-     * Handle an incoming authentication request.
-     */
-    public function store(LoginRequest $request): RedirectResponse|\Illuminate\Http\JsonResponse
+    public function store(LoginRequest $request): RedirectResponse|JsonResponse
     {
         $request->authenticate();
-
         $request->session()->regenerate();
 
         $user = $request->user();
-        $user->forceFill(['last_login_at' => now()])->save();
+        $user->forceFill([
+            'last_login_at' => now(),
+        ])->save();
+
         $user->tokens()->delete();
         $token = $user->createToken('spa')->plainTextToken;
 
-        $redirectPath = match ($user->role) {
+        $redirect = match ($user->role) {
             'owner' => '/owner-dashboard',
             'client' => '/client-dashboard',
             default => '/dashboard',
         };
 
-        if ($request->expectsJson() || $request->wantsJson()) {
+        if ($request->expectsJson()) {
             return response()->json([
+                'message' => 'Login successful.',
                 'token' => $token,
+                'redirect_role' => $user->role,
+                'redirect' => $redirect,
                 'user' => [
                     'id' => $user->id,
                     'name' => $user->name,
@@ -58,23 +52,18 @@ class AuthenticatedSessionController extends Controller
                     'phone' => $user->phone,
                     'is_active' => $user->is_active,
                 ],
-                'redirect_role' => $user->role,
-                'redirect_path' => $redirectPath,
             ]);
         }
 
-        return redirect()->intended($redirectPath);
+        return redirect()->intended($redirect);
     }
 
-    /**
-     * Destroy an authenticated session.
-     */
     public function destroy(Request $request): RedirectResponse
     {
+        $request->user()?->tokens()?->delete();
         Auth::guard('web')->logout();
 
         $request->session()->invalidate();
-
         $request->session()->regenerateToken();
 
         return redirect('/');

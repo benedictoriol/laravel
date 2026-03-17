@@ -10,9 +10,11 @@ class DesignProof extends Model
         'design_customization_id',
         'proof_no',
         'generated_by',
+        'version_no',
         'preview_file_path',
         'annotated_notes',
         'pricing_snapshot_json',
+        'proof_summary_json',
         'status',
         'responded_by',
         'responded_at',
@@ -23,6 +25,7 @@ class DesignProof extends Model
     {
         return [
             'pricing_snapshot_json' => 'array',
+            'proof_summary_json' => 'array',
             'responded_at' => 'datetime',
             'expires_at' => 'datetime',
             'created_at' => 'datetime',

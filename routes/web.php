@@ -14,28 +14,19 @@ Route::get('/', function () {
     ]);
 });
 
+Route::get('/dashboard', function () {
+    return Inertia::render('Dashboard');
+})->name('dashboard');
+
+Route::get('/client-dashboard', function () {
+    return Inertia::render('Client/Workspace');
+})->name('client.dashboard');
+
+Route::get('/owner-dashboard', function () {
+    return Inertia::render('Owner/Workspace');
+})->name('owner.dashboard');
+
 Route::middleware('auth')->group(function () {
-    Route::get('/dashboard', function () {
-        $user = request()->user();
-        if ($user?->role === 'client') {
-            return redirect()->route('client.dashboard');
-        }
-        if ($user?->role === 'owner') {
-            return redirect()->route('owner.dashboard');
-        }
-
-        return Inertia::render('Dashboard');
-    })->name('dashboard');
-
-    Route::get('/client-dashboard', function () {
-        return Inertia::render('Client/Workspace');
-    })->name('client.dashboard');
-
-    Route::get('/owner-dashboard', function () {
-        return Inertia::render('Owner/Workspace');
-    })->name('owner.dashboard');
-
-
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');

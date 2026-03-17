@@ -33,6 +33,19 @@ class DesignCustomization extends Model
         'pricing_strategy',
         'last_priced_at',
         'approved_proof_id',
+        'workflow_status',
+        'current_version_no',
+        'approved_version_no',
+        'submitted_at',
+        'last_revision_requested_at',
+        'locked_at',
+        'production_status',
+        'production_ready_at',
+        'latest_production_package_id',
+        'color_mapping_json',
+        'risk_flags_json',
+        'suggested_quote_basis_json',
+        'production_meta_json',
     ];
 
     protected function casts(): array
@@ -47,7 +60,17 @@ class DesignCustomization extends Model
             'design_session_json' => 'array',
             'preview_meta_json' => 'array',
             'pricing_confidence_score' => 'decimal:2',
+            'current_version_no' => 'integer',
+            'approved_version_no' => 'integer',
             'last_priced_at' => 'datetime',
+            'submitted_at' => 'datetime',
+            'last_revision_requested_at' => 'datetime',
+            'locked_at' => 'datetime',
+            'production_ready_at' => 'datetime',
+            'color_mapping_json' => 'array',
+            'risk_flags_json' => 'array',
+            'suggested_quote_basis_json' => 'array',
+            'production_meta_json' => 'array',
             'created_at' => 'datetime',
             'updated_at' => 'datetime',
         ];
@@ -59,5 +82,9 @@ class DesignCustomization extends Model
     public function proofs() { return $this->hasMany(DesignProof::class); }
     public function snapshots() { return $this->hasMany(DesignCustomizationSnapshot::class); }
     public function approvedProof() { return $this->belongsTo(DesignProof::class, 'approved_proof_id'); }
+    public function workflowEvents() { return $this->hasMany(DesignWorkflowEvent::class); }
+    public function productionPackages() { return $this->hasMany(DesignProductionPackage::class); }
+    public function latestProductionPackage() { return $this->belongsTo(DesignProductionPackage::class, 'latest_production_package_id'); }
 }
+
 

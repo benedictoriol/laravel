@@ -7,30 +7,18 @@ use App\Models\ClientSavedAddress;
 use App\Models\ClientProfile;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class ClientProfileController extends Controller
 {
     public function show(Request $request): JsonResponse
     {
         $user = $request->user();
-        $profile = ClientProfile::firstOrCreate(
-            ['user_id' => $user->id],
-            [
-                'email' => $user->email,
-                'registration_date' => optional($user->created_at)->toDateString(),
-            ]
-        );
-
-        if (! $profile->registration_date && $user->created_at) {
-            $profile->forceFill(['registration_date' => $user->created_at->toDateString()])->save();
-        }
-
-        if (! $profile->email && $user->email) {
-            $profile->forceFill(['email' => $user->email])->save();
-        }
+        $profile = $this->findOrCreateProfile($user->id);
+        $this->syncProfileDefaults($profile, $user);
 
         return response()->json([
-            'profile' => $profile->load('addresses'),
+            'profile' => $profile->fresh()->load('addresses'),
             'address_options' => $this->addressOptions(),
         ]);
     }
@@ -43,7 +31,7 @@ class ClientProfileController extends Controller
     public function update(Request $request): JsonResponse
     {
         $user = $request->user();
-        $profile = ClientProfile::firstOrCreate(['user_id' => $user->id]);
+        $profile = $this->findOrCreateProfile($user->id);
 
         $validated = $request->validate([
             'first_name' => ['nullable', 'string', 'max:100'],
@@ -62,8 +50,16 @@ class ClientProfileController extends Controller
             $user->forceFill(['email' => $validated['email']])->save();
         }
 
-        $validated['registration_date'] = $profile->registration_date ?: ($validated['registration_date'] ?? optional($user->created_at)->toDateString());
-        $profile->update($validated);
+        $updatable = $this->filterExistingColumns($validated, 'client_profiles');
+        if (array_key_exists('registration_date', $validated) === false && $this->hasProfileColumn('registration_date') && empty($profile->registration_date) && $user->created_at) {
+            $updatable['registration_date'] = $user->created_at->toDateString();
+        }
+
+        if (! empty($updatable)) {
+            $profile->update($updatable);
+        }
+
+        $this->syncProfileDefaults($profile->fresh(), $user);
 
         return response()->json([
             'profile' => $profile->fresh()->load('addresses'),
@@ -73,41 +69,37 @@ class ClientProfileController extends Controller
 
     public function storeAddress(Request $request): JsonResponse
     {
-        $profile = ClientProfile::firstOrCreate(['user_id' => $request->user()->id]);
+        $profile = $this->findOrCreateProfile($request->user()->id);
         $validated = $this->validateAddress($request, false);
-        $validated['country'] = 'Philippines';
-        $validated['province'] = 'Cavite';
 
         if (! empty($validated['is_default'])) {
             $profile->addresses()->update(['is_default' => false]);
         }
 
-        $address = $profile->addresses()->create($validated);
+        $address = $profile->addresses()->create($this->normalizeAddressForSchema($validated));
 
         return response()->json($address->fresh(), 201);
     }
 
     public function updateAddress(Request $request, ClientSavedAddress $address): JsonResponse
     {
-        $profile = ClientProfile::firstOrCreate(['user_id' => $request->user()->id]);
+        $profile = $this->findOrCreateProfile($request->user()->id);
         abort_unless((int) $address->client_profile_id === (int) $profile->id, 404);
 
         $validated = $this->validateAddress($request, true);
-        $validated['country'] = 'Philippines';
-        $validated['province'] = 'Cavite';
 
         if (($validated['is_default'] ?? false) === true) {
             $profile->addresses()->update(['is_default' => false]);
         }
 
-        $address->update($validated);
+        $address->update($this->normalizeAddressForSchema($validated));
 
         return response()->json($address->fresh());
     }
 
     public function deleteAddress(Request $request, ClientSavedAddress $address): JsonResponse
     {
-        $profile = ClientProfile::firstOrCreate(['user_id' => $request->user()->id]);
+        $profile = $this->findOrCreateProfile($request->user()->id);
         abort_unless((int) $address->client_profile_id === (int) $profile->id, 404);
         $address->delete();
         return response()->json(['message' => 'Address removed successfully.']);
@@ -128,6 +120,58 @@ class ClientProfileController extends Controller
             'postal_code' => [$partial ? 'sometimes' : 'required', 'string', 'max:20'],
             'is_default' => ['nullable', 'boolean'],
         ]);
+    }
+
+    protected function normalizeAddressForSchema(array $validated): array
+    {
+        $payload = $validated;
+        if ($this->hasAddressColumn('country')) {
+            $payload['country'] = 'Philippines';
+        }
+        if ($this->hasAddressColumn('province')) {
+            $payload['province'] = 'Cavite';
+        }
+
+        return $this->filterExistingColumns($payload, 'client_saved_addresses');
+    }
+
+    protected function findOrCreateProfile(int $userId): ClientProfile
+    {
+        return ClientProfile::firstOrCreate(['user_id' => $userId]);
+    }
+
+    protected function syncProfileDefaults(ClientProfile $profile, $user): void
+    {
+        $updates = [];
+
+        if ($this->hasProfileColumn('email') && empty($profile->email) && ! empty($user->email)) {
+            $updates['email'] = $user->email;
+        }
+
+        if ($this->hasProfileColumn('registration_date') && empty($profile->registration_date) && $user->created_at) {
+            $updates['registration_date'] = $user->created_at->toDateString();
+        }
+
+        if (! empty($updates)) {
+            $profile->forceFill($updates)->save();
+        }
+    }
+
+    protected function filterExistingColumns(array $values, string $table): array
+    {
+        return collect($values)
+            ->filter(fn ($value, $key) => Schema::hasColumn($table, $key))
+            ->all();
+    }
+
+    protected function hasProfileColumn(string $column): bool
+    {
+        return Schema::hasColumn('client_profiles', $column);
+    }
+
+    protected function hasAddressColumn(string $column): bool
+    {
+        return Schema::hasColumn('client_saved_addresses', $column);
     }
 
     protected function addressOptions(): array

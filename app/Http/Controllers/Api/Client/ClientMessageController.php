@@ -12,6 +12,7 @@ use App\Models\ShopProject;
 use App\Models\DesignPost;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class ClientMessageController extends Controller
 {
@@ -19,19 +20,28 @@ class ClientMessageController extends Controller
     {
         $shopIds = Order::where('client_user_id', $request->user()->id)->pluck('shop_id')->filter()->unique();
 
-        return response()->json(
-            MessageThread::with(['messages.sender:id,name'])
-                ->where(function ($query) use ($shopIds, $request) {
-                    $query->whereIn('shop_id', $shopIds)
-                        ->orWhereJsonContains('participant_user_ids_json', $request->user()->id);
-                })
-                ->where(function ($query) use ($request) {
-                    $query->whereJsonContains('participant_user_ids_json', $request->user()->id)
+        $hasParticipantJson = Schema::hasColumn('message_threads', 'participant_user_ids_json');
+
+        $query = MessageThread::with(['messages.sender:id,name'])
+            ->where(function ($builder) use ($shopIds, $request, $hasParticipantJson) {
+                $builder->whereIn('shop_id', $shopIds);
+
+                if ($hasParticipantJson) {
+                    $builder->orWhereJsonContains('participant_user_ids_json', $request->user()->id);
+                }
+            })
+            ->where(function ($builder) use ($request, $hasParticipantJson) {
+                if ($hasParticipantJson) {
+                    $builder->whereJsonContains('participant_user_ids_json', $request->user()->id)
                         ->orWhereHas('order', fn ($orderQuery) => $orderQuery->where('client_user_id', $request->user()->id));
-                })
-                ->latest('last_message_at')
-                ->get()
-        );
+
+                    return;
+                }
+
+                $builder->whereHas('order', fn ($orderQuery) => $orderQuery->where('client_user_id', $request->user()->id));
+            });
+
+        return response()->json($query->latest('last_message_at')->get());
     }
 
     public function store(Request $request): JsonResponse
@@ -73,11 +83,13 @@ class ClientMessageController extends Controller
                 'order_id' => $validated['order_id'] ?? null,
                 'title' => $validated['title'],
             ],
-            [
+            array_filter([
                 'type' => $threadType,
-                'participant_user_ids_json' => array_values(array_filter([$request->user()->id, $shop->owner_user_id])),
+                'participant_user_ids_json' => Schema::hasColumn('message_threads', 'participant_user_ids_json')
+                    ? array_values(array_filter([$request->user()->id, $shop->owner_user_id]))
+                    : null,
                 'last_message_at' => now(),
-            ]
+            ], fn ($value) => $value !== null)
         );
 
         $message = Message::create([
@@ -108,7 +120,7 @@ class ClientMessageController extends Controller
 
     public function postMessage(Request $request, MessageThread $thread): JsonResponse
     {
-        abort_unless(in_array($request->user()->id, $thread->participant_user_ids_json ?? [], true) || optional($thread->order)->client_user_id === $request->user()->id, 403);
+        abort_unless((Schema::hasColumn('message_threads', 'participant_user_ids_json') && in_array($request->user()->id, $thread->participant_user_ids_json ?? [], true)) || optional($thread->order)->client_user_id === $request->user()->id, 403);
 
         $validated = $request->validate([
             'message' => ['required', 'string'],

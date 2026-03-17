@@ -97,6 +97,65 @@ function money(v) { return Number(v || 0).toLocaleString(undefined, { minimumFra
 function barWidth(item, source) { const max = Math.max(...(source || []).map((row) => Number(row.value || 0)), 1); return `${Math.max((Number(item.value || 0) / max) * 100, 6)}%`; }
 function getError(err) { return err?.response?.data?.message || Object.values(err?.response?.data?.errors || {})?.[0]?.[0] || 'Request failed.'; }
 async function api(method, url, payload) { applyApiToken(token.value); return window.axios({ method, url, data: payload }); }
+async function generateProof(item) {
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/owner-proof`, { notes: `Owner proof generated for ${item.name}.` });
+    setFlash('Proof generated and sent to client.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function lockApprovedDesign(item) {
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/approve`, { lock: true });
+    setFlash('Design approved and locked.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function createVersionSnapshot(item) {
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/versions`, { change_summary: 'Owner review checkpoint', notes: 'Snapshot captured from owner workspace.' });
+    setFlash('Version checkpoint saved.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+
+async function markReadyForDigitizing(item) {
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/production-status`, { production_status: 'ready_for_digitizing', internal_note: `Prepared ${item.name} for digitizing.` });
+    setFlash('Marked as ready for digitizing.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function markReadyForProduction(item) {
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/production-status`, { production_status: 'ready_for_production', internal_note: `Prepared ${item.name} for production.` });
+    setFlash('Marked as ready for production.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function createProductionPackage(item) {
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/production-package`, { handoff: true, internal_note: `Production package created for ${item.name}.` });
+    setFlash('Production package created.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
+async function unlockLockedDesign(item) {
+  const reason = window.prompt('Enter override reason for unlocking this design:');
+  if (!reason) return;
+  saving.value = true;
+  try {
+    await api('post', `/api/design-customizations/${item.id}/unlock`, { override_reason: reason });
+    setFlash('Design unlocked with override reason.', 'success');
+    await load();
+  } catch (err) { setFlash(getError(err), 'error'); } finally { saving.value = false; }
+}
 
 async function load() {
   try {
@@ -418,25 +477,61 @@ onMounted(load);
           <div class="space-y-4">
             <div v-for="item in data?.design_proofing || []" :key="item.id" class="rounded-3xl border border-stone-200 p-5">
               <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <div class="text-lg font-semibold text-stone-900">{{ item.name || 'Customization request' }}</div>
+                <div class="flex-1">
+                  <div class="flex flex-wrap items-center gap-2"><div class="text-lg font-semibold text-stone-900">{{ item.name || 'Customization request' }}</div><span class="rounded-full border border-stone-300 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-600">{{ item.workflow_status || item.status }}</span></div>
                   <div class="mt-1 text-sm text-stone-500">{{ item.user?.name || 'Client' }} · {{ item.garment_type }} · {{ item.placement_area }}</div>
                   <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4 text-sm text-stone-600">
                     <div>Colors: <span class="font-medium text-stone-900">{{ item.color_count }}</span></div>
                     <div>Complexity: <span class="font-medium text-stone-900">{{ item.complexity_level }}</span></div>
                     <div>Stitches: <span class="font-medium text-stone-900">{{ item.stitch_count_estimate || item.pricing_breakdown_preview?.stitch_count_estimate || '—' }}</span></div>
                     <div>Status: <span class="font-medium capitalize text-stone-900">{{ item.status }}</span></div>
+                    <div>Version: <span class="font-medium text-stone-900">#{{ item.current_version_no || item.snapshots?.length || 1 }}</span></div>
+                    <div>Approved: <span class="font-medium text-stone-900">{{ item.approved_version_no ? `#${item.approved_version_no}` : '—' }}</span></div>
+                    <div>Revisions: <span class="font-medium text-stone-900">{{ item.revision_count || 0 }}</span></div>
+                    <div>Proofs: <span class="font-medium text-stone-900">{{ item.proof_history_count || item.proofs?.length || 0 }}</span></div>
+                  </div>
+                  <div v-if="item.latest_activity" class="mt-3 rounded-2xl border border-stone-200 bg-white p-3 text-sm text-stone-600">
+                    <div class="font-medium text-stone-900">{{ item.latest_activity.summary }}</div>
+                    <div class="mt-1">{{ item.latest_activity.actor?.name || 'System' }} · {{ new Date(item.latest_activity.created_at).toLocaleString() }}</div>
+                    <div v-if="item.latest_activity.details" class="mt-1 text-stone-500">{{ item.latest_activity.details }}</div>
                   </div>
                 </div>
-                <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm min-w-[220px]">
+                <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm min-w-[260px]">
                   <div class="text-xs uppercase tracking-[0.2em] text-stone-500">Suggested quote</div>
                   <div class="mt-2 text-2xl font-semibold text-stone-900">₱ {{ money(item.suggested_quote) }}</div>
                   <div class="mt-3 space-y-1 text-stone-600">
                     <div>Base: ₱ {{ money(item.pricing_breakdown_preview?.base_unit_price) }}</div>
                     <div>Rush fee: ₱ {{ money(item.pricing_breakdown_preview?.rush_fee) }}</div>
                     <div>Material fee: ₱ {{ money(item.pricing_breakdown_preview?.material_fee) }}</div>
+                    <div>Digitizing fee: ₱ {{ money(item.suggested_quote_basis_json?.estimated_digitizing_fee) }}</div>
+                    <div>Placement surcharge: ₱ {{ money(item.suggested_quote_basis_json?.placement_surcharge) }}</div>
                     <div>Confidence: {{ item.pricing_breakdown_preview?.confidence_score || item.pricing_confidence_score || 0 }}%</div>
                   </div>
+                  <div class="mt-3 rounded-2xl border border-stone-200 bg-white p-3 text-xs text-stone-600">
+                    <div class="font-semibold uppercase tracking-[0.16em] text-stone-500">Production readiness</div>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">{{ item.production_status || 'Not staged' }}</span>
+                      <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">Risk flags: {{ item.risk_flag_count || 0 }}</span>
+                      <span class="rounded-full border border-stone-300 bg-stone-50 px-2.5 py-1 font-medium text-stone-700">Packages: {{ item.production_package_count || 0 }}</span>
+                    </div>
+                    <div v-if="item.color_mapping_json?.length" class="mt-2">Threads: {{ item.color_mapping_json.map((thread) => thread.thread_name).join(', ') }}</div>
+                  </div>
+                  <div class="mt-4 grid gap-2">
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving" @click="createVersionSnapshot(item)">Save version checkpoint</button>
+                    <button class="rounded-2xl bg-stone-900 px-3 py-2 text-sm font-medium text-white" :disabled="saving" @click="generateProof(item)">Generate proof for client</button>
+                    <button class="rounded-2xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900" :disabled="saving || !['approved','proof_ready'].includes(item.status)" @click="lockApprovedDesign(item)">Lock approved design</button>
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving" @click="markReadyForDigitizing(item)">Mark ready for digitizing</button>
+                    <button class="rounded-2xl border border-stone-300 px-3 py-2 text-sm text-stone-700" :disabled="saving" @click="markReadyForProduction(item)">Mark ready for production</button>
+                    <button class="rounded-2xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-900" :disabled="saving" @click="createProductionPackage(item)">Create production package</button>
+                    <button v-if="item.locked_at" class="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900" :disabled="saving" @click="unlockLockedDesign(item)">Unlock with override</button>
+                  </div>
+                </div>
+              </div>
+              <div v-if="item.snapshots?.length" class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                <div v-for="version in item.snapshots.slice(0, 3)" :key="version.id" class="rounded-2xl border border-stone-200 bg-white p-3 text-sm text-stone-600">
+                  <div class="font-medium text-stone-900">Version #{{ version.version_no }}</div>
+                  <div class="mt-1">{{ version.change_summary }}</div>
+                  <div class="mt-1 text-xs text-stone-500">{{ version.actor?.name || 'System' }} · {{ new Date(version.created_at).toLocaleString() }}</div>
                 </div>
               </div>
             </div>

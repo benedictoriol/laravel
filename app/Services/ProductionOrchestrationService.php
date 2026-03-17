@@ -294,13 +294,14 @@ class ProductionOrchestrationService
                 [
                     'client_user_id' => $client->id,
                     'shop_id' => $metric->shop_id,
-                    'generated_for_type' => 'marketplace_match',
+                    'generated_for_type' => 'client',
                 ],
                 [
                     'basis' => 'completion_rate, rating, recommendation score, delay risk',
                     'score' => (($metric->completion_rate ?? 0) * 40) + (($metric->avg_rating ?? 0) * 10) + (($metric->recommendation_score ?? 0) * 0.4) - (($metric->delay_risk_score ?? 0) * 0.3),
                     'rank_position' => $index + 1,
                     'context_json' => [
+                        'recommendation_context' => 'marketplace_match',
                         'design_type' => $design?->design_type,
                         'quantity' => $design?->quantity,
                     ],

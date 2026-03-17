@@ -6,8 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\ClientProfile;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
@@ -22,29 +22,35 @@ class AuthController extends Controller
             'role' => ['nullable', Rule::in(['client', 'owner'])],
         ]);
 
-        $user = User::create([
+        $payload = [
             'name' => $validated['name'],
             'email' => $validated['email'],
             'password' => Hash::make($validated['password']),
-            'phone' => $validated['phone'] ?? null,
-            'role' => $validated['role'] ?? 'client',
-            'is_active' => true,
-        ]);
+        ];
 
-        if ($user->role === 'client') {
+        if (Schema::hasColumn('users', 'phone')) {
+            $payload['phone'] = $validated['phone'] ?? null;
+        }
+        if (Schema::hasColumn('users', 'role')) {
+            $payload['role'] = $validated['role'] ?? 'client';
+        }
+        if (Schema::hasColumn('users', 'is_active')) {
+            $payload['is_active'] = true;
+        }
+
+        $user = User::create($payload);
+        $role = Schema::hasColumn('users', 'role') ? ($user->role ?: 'client') : 'client';
+
+        if ($role === 'client') {
             ClientProfile::firstOrCreate(['user_id' => $user->id]);
         }
 
         $token = $user->createToken('spa')->plainTextToken;
-        if (method_exists($request, 'hasSession') && $request->hasSession()) {
-            Auth::login($user);
-            $request->session()->regenerate();
-        }
 
         return response()->json([
             'token' => $token,
-            'user' => $user,
-            'redirect_role' => $user->role,
+            'user' => $this->serializeUser($user),
+            'redirect_role' => $role,
         ], 201);
     }
 
@@ -61,55 +67,49 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid credentials.'], 422);
         }
 
-        if (! $user->is_active) {
+        if (Schema::hasColumn('users', 'is_active') && ! $user->is_active) {
             return response()->json(['message' => 'Account is inactive.'], 403);
         }
 
-        $user->forceFill([
-            'last_login_at' => now(),
-        ])->save();
+        if (Schema::hasColumn('users', 'last_login_at')) {
+            $user->forceFill(['last_login_at' => now()])->save();
+        }
 
         $user->tokens()->delete();
-
         $token = $user->createToken('spa')->plainTextToken;
-        if (method_exists($request, 'hasSession') && $request->hasSession()) {
-            Auth::login($user);
-            $request->session()->regenerate();
-        }
+        $role = Schema::hasColumn('users', 'role') ? ($user->role ?: 'client') : 'client';
 
         return response()->json([
             'token' => $token,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'role' => $user->role,
-                'shop_id' => $user->shop_id,
-                'phone' => $user->phone,
-                'is_active' => $user->is_active,
-            ],
-            'redirect_role' => $user->role,
+            'user' => $this->serializeUser($user),
+            'redirect_role' => $role,
         ]);
     }
 
     public function me(Request $request)
     {
-        return response()->json(
-            $request->user()->load('shop')
-        );
+        return response()->json($request->user()->loadMissing('shop'));
     }
 
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()?->delete();
-        if (method_exists($request, 'hasSession') && $request->hasSession()) {
-            Auth::guard('web')->logout();
-            $request->session()->invalidate();
-            $request->session()->regenerateToken();
-        }
 
         return response()->json([
             'message' => 'Logged out successfully.',
         ]);
+    }
+
+    protected function serializeUser(User $user): array
+    {
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => Schema::hasColumn('users', 'role') ? ($user->role ?: 'client') : 'client',
+            'shop_id' => Schema::hasColumn('users', 'shop_id') ? $user->shop_id : null,
+            'phone' => Schema::hasColumn('users', 'phone') ? $user->phone : null,
+            'is_active' => Schema::hasColumn('users', 'is_active') ? (bool) $user->is_active : true,
+        ];
     }
 }

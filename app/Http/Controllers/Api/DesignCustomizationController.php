@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\DesignCustomization;
 use App\Models\DesignCustomizationSnapshot;
 use App\Models\DesignPost;
+use App\Models\DesignWorkflowEvent;
 use App\Models\OrderProgressLog;
 use App\Models\PlatformNotification;
 use App\Models\ShopService;
@@ -20,7 +21,7 @@ class DesignCustomizationController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = DesignCustomization::with(['designPost', 'order', 'proofs', 'snapshots'])->latest('id');
+        $query = DesignCustomization::with(['designPost', 'order', 'proofs', 'snapshots', 'workflowEvents', 'productionPackages', 'latestProductionPackage'])->latest('id');
         if ($user->isClient()) {
             $query->where('user_id', $user->id);
         } elseif (! $user->isAdmin()) {
@@ -37,8 +38,13 @@ class DesignCustomizationController extends Controller
         $validated = $this->validatePayload($request, false);
         $service = !empty($validated['service_id']) ? ShopService::find($validated['service_id']) : null;
         $pricing = $this->pricingSuggestionService->estimate($validated, $service);
+        $phaseFour = $this->phaseFourComputedFields(array_merge($validated, [
+            'color_count' => $pricing['color_count'] ?? null,
+            'stitch_count_estimate' => $pricing['stitch_count_estimate'] ?? null,
+            'pricing_breakdown_json' => $pricing,
+        ]));
 
-        $customization = DesignCustomization::create([
+        $customization = DesignCustomization::create(array_merge([
             'design_post_id' => $validated['design_post_id'] ?? null,
             'order_id' => $validated['order_id'] ?? null,
             'user_id' => $request->user()->id,
@@ -56,6 +62,8 @@ class DesignCustomizationController extends Controller
             'artwork_path' => $validated['artwork_path'] ?? null,
             'preview_path' => $validated['preview_path'] ?? null,
             'status' => 'estimated',
+            'workflow_status' => 'draft',
+            'current_version_no' => 1,
             'estimated_base_price' => $pricing['base_unit_price'],
             'estimated_total_price' => $pricing['suggested_total'],
             'pricing_breakdown_json' => $pricing,
@@ -64,17 +72,19 @@ class DesignCustomizationController extends Controller
             'pricing_confidence_score' => $pricing['confidence_score'],
             'pricing_strategy' => $pricing['pricing_strategy'],
             'last_priced_at' => now(),
-        ]);
+        ], $phaseFour));
 
         $this->captureSnapshot($customization, $request->user()->id, 'Initial customization saved');
         $this->writeProgressAndNotifications($customization, $request->user()->id, true);
 
-        return response()->json($customization->load(['proofs', 'snapshots']), 201);
+        $this->recordWorkflowEvent($customization, $request->user()->id, 'draft_created', 'Created design draft.', 'Initial design draft captured for proofing and quotation workflow.');
+
+        return response()->json($customization->load(['proofs', 'snapshots', 'workflowEvents', 'productionPackages', 'latestProductionPackage']), 201);
     }
 
     public function show(DesignCustomization $designCustomization): JsonResponse
     {
-        return response()->json($designCustomization->load(['designPost', 'order', 'proofs', 'snapshots', 'approvedProof']));
+        return response()->json($designCustomization->load(['designPost', 'order', 'proofs', 'snapshots.actor', 'approvedProof', 'workflowEvents.actor', 'productionPackages.creator', 'latestProductionPackage']));
     }
 
     public function update(Request $request, DesignCustomization $designCustomization): JsonResponse
@@ -83,6 +93,11 @@ class DesignCustomizationController extends Controller
         abort_if($designCustomization->status === 'approved' && array_key_exists('status', $validated) && $validated['status'] !== 'approved', 422, 'Approved customizations can no longer be moved backward.');
 
         $pricing = $this->pricingSuggestionService->estimate(array_merge($designCustomization->toArray(), $validated));
+        $phaseFour = $this->phaseFourComputedFields(array_merge($designCustomization->toArray(), $validated, [
+            'color_count' => $pricing['color_count'] ?? null,
+            'stitch_count_estimate' => $pricing['stitch_count_estimate'] ?? null,
+            'pricing_breakdown_json' => $pricing,
+        ]));
         $designCustomization->update(array_merge($validated, [
             'color_count' => $pricing['color_count'],
             'stitch_count_estimate' => $pricing['stitch_count_estimate'],
@@ -92,11 +107,13 @@ class DesignCustomizationController extends Controller
             'pricing_confidence_score' => $pricing['confidence_score'],
             'pricing_strategy' => $pricing['pricing_strategy'],
             'last_priced_at' => now(),
-        ]));
+        ], $phaseFour));
 
-        $this->captureSnapshot($designCustomization->fresh(), $request->user()->id, 'Customization updated');
+        $fresh = $designCustomization->fresh();
+        $this->captureSnapshot($fresh, $request->user()->id, 'Customization updated');
+        $this->recordWorkflowEvent($fresh, $request->user()->id, 'autosaved', 'Designer changes saved.', 'Design metadata and editor state were updated.');
 
-        return response()->json($designCustomization->fresh(['proofs', 'snapshots', 'approvedProof']));
+        return response()->json($fresh->load(['proofs', 'snapshots.actor', 'approvedProof', 'workflowEvents.actor', 'productionPackages.creator', 'latestProductionPackage']));
     }
 
     public function suggestPrice(Request $request): JsonResponse
@@ -143,6 +160,7 @@ class DesignCustomizationController extends Controller
             'status' => ['nullable', 'in:draft,estimated,proof_ready,approved,archived'],
             'design_session_json' => ['nullable', 'array'],
             'preview_meta_json' => ['nullable', 'array'],
+            'override_reason' => ['nullable', 'string', 'max:1000'],
         ];
         return $request->validate($base);
     }
@@ -156,10 +174,105 @@ class DesignCustomizationController extends Controller
             'captured_by' => $userId,
             'change_summary' => $summary,
             'snapshot_json' => $customization->only([
-                'name','garment_type','placement_area','fabric_type','width_mm','height_mm','color_count','stitch_count_estimate','complexity_level','special_styles_json','notes','artwork_path','preview_path','status','design_session_json','preview_meta_json'
+                'name','garment_type','placement_area','fabric_type','width_mm','height_mm','color_count','stitch_count_estimate','complexity_level','special_styles_json','notes','artwork_path','preview_path','status','design_session_json','preview_meta_json','production_status','color_mapping_json','risk_flags_json','suggested_quote_basis_json'
             ]),
             'pricing_snapshot_json' => $customization->pricing_breakdown_json,
         ]);
+
+        if (array_key_exists('current_version_no', $customization->getAttributes())) {
+            $customization->forceFill(['current_version_no' => $version])->save();
+        }
+    }
+
+    protected function recordWorkflowEvent(DesignCustomization $customization, int $actorId, string $type, string $summary, ?string $details = null): void
+    {
+        if (! class_exists(DesignWorkflowEvent::class)) return;
+        DesignWorkflowEvent::create([
+            'design_customization_id' => $customization->id,
+            'actor_user_id' => $actorId,
+            'event_type' => $type,
+            'summary' => $summary,
+            'details' => $details,
+        ]);
+    }
+
+
+    protected function phaseFourComputedFields(array $payload): array
+    {
+        $previewMeta = is_array($payload['preview_meta_json'] ?? null) ? $payload['preview_meta_json'] : [];
+        $designSession = is_array($payload['design_session_json'] ?? null) ? $payload['design_session_json'] : [];
+        $layers = collect($designSession['layers'] ?? [])->filter(fn ($layer) => is_array($layer))->values();
+        $colors = $layers->flatMap(fn ($layer) => array_values(array_filter([data_get($layer, 'color'), data_get($layer, 'fill'), data_get($layer, 'stroke'), data_get($layer, 'meta.primaryColor')])))->map(fn ($value) => strtoupper((string) $value))->filter()->unique()->values();
+        $threadMapping = $colors->map(function ($hex, $index) {
+            return [
+                'hex' => $hex,
+                'thread_code' => 'THR-'.str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT),
+                'thread_name' => $this->threadNameFromHex($hex),
+            ];
+        })->values()->all();
+
+        $width = (float) ($payload['width_mm'] ?? 0);
+        $height = (float) ($payload['height_mm'] ?? 0);
+        $stitches = (int) ($payload['stitch_count_estimate'] ?? data_get($previewMeta, 'stitch_estimate', 0));
+        $complexity = strtolower(str_replace(' ', '_', (string) ($payload['complexity_level'] ?? data_get($previewMeta, 'complexity', 'medium'))));
+        $colorCount = max((int) ($payload['color_count'] ?? 0), count($threadMapping), count((array) data_get($previewMeta, 'palette', [])));
+        $placement = (string) ($payload['placement_area'] ?? 'left_chest');
+        $garment = (string) ($payload['garment_type'] ?? 'polo');
+        $isRush = (bool) ($payload['is_rush'] ?? false);
+        $revisionCount = (int) data_get($payload, 'revision_count', 0);
+        $area = max(1, $width * $height);
+        $complexityFactor = match ($complexity) {
+            'very_high', 'premium' => 1.8,
+            'high', 'complex' => 1.45,
+            'medium', 'standard' => 1.2,
+            default => 1.0,
+        };
+        $placementSurcharge = in_array($placement, ['cap_front', 'cap_side', 'sleeve'], true) ? 85 : (in_array($placement, ['full_front', 'back'], true) ? 120 : 0);
+        $garmentFactor = in_array($garment, ['cap', 'hoodie', 'jacket'], true) ? 1.18 : 1.0;
+        $digitizingFee = round(max(180, 140 + ($stitches * 0.018 * $complexityFactor) + ($colorCount * 16)), 2);
+        $revisionOverhead = round($revisionCount * 45, 2);
+        $rushFee = $isRush ? round(max(120, $digitizingFee * 0.18), 2) : 0;
+        $estimatedUnit = round((85 + ($stitches * 0.014) + ($colorCount * 18)) * $garmentFactor + $placementSurcharge, 2);
+        $suggestedTotal = round($estimatedUnit + $digitizingFee + $revisionOverhead + $rushFee, 2);
+        $riskFlags = [];
+        foreach ((array) ($previewMeta['warnings'] ?? []) as $warning) $riskFlags[] = ['level' => 'warning', 'message' => (string) $warning];
+        if ($colorCount >= 8) $riskFlags[] = ['level' => 'high', 'message' => 'High thread color count may require production simplification.'];
+        if ($stitches >= 14000) $riskFlags[] = ['level' => 'high', 'message' => 'High stitch count may increase run time and heat buildup.'];
+        if ($area >= 40000) $riskFlags[] = ['level' => 'medium', 'message' => 'Large embroidery area should be checked against placement stability.'];
+        $riskFlags = collect($riskFlags)->unique(fn ($item) => $item['message'])->values()->all();
+
+        return [
+            'color_count' => $colorCount,
+            'color_mapping_json' => $threadMapping,
+            'risk_flags_json' => $riskFlags,
+            'suggested_quote_basis_json' => [
+                'estimated_digitizing_fee' => $digitizingFee,
+                'complexity_factor' => $complexityFactor,
+                'stitch_effort_factor' => round($stitches / 1000, 2),
+                'placement_surcharge' => $placementSurcharge,
+                'garment_factor' => $garmentFactor,
+                'rush_fee' => $rushFee,
+                'revision_overhead' => $revisionOverhead,
+                'estimated_unit_price' => $estimatedUnit,
+                'suggested_total' => $suggestedTotal,
+                'color_count' => $colorCount,
+            ],
+            'production_meta_json' => array_merge(is_array($payload['production_meta_json'] ?? null) ? $payload['production_meta_json'] : [], [
+                'production_color_summary' => array_map(fn ($item) => $item['thread_name'].' ('.$item['thread_code'].')', $threadMapping),
+                'risk_flag_count' => count($riskFlags),
+            ]),
+        ];
+    }
+
+    protected function threadNameFromHex(string $hex): string
+    {
+        $hex = strtoupper($hex);
+        if (str_contains($hex, '000000')) return 'Jet Black';
+        if (str_contains($hex, 'FFFFFF') || str_contains($hex, 'FAFAF9')) return 'Bright White';
+        if (preg_match('/^#?(FF|F5|F2)/', $hex)) return 'Warm White';
+        if (preg_match('/^#?(E|D|C).*/', ltrim($hex, '#'))) return 'Stone Neutral';
+        if (str_contains($hex, '0F') || str_contains($hex, '17')) return 'Deep Navy';
+        return 'Custom Thread';
     }
 
     protected function writeProgressAndNotifications(DesignCustomization $customization, int $actorId, bool $created = false): void

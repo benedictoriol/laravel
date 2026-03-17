@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\DesignCustomization;
 use App\Models\DesignProof;
+use App\Models\DesignWorkflowEvent;
 use App\Models\OrderProgressLog;
 use App\Models\PlatformNotification;
 use Illuminate\Http\JsonResponse;
@@ -34,13 +35,28 @@ class DesignProofController extends Controller
             'design_customization_id' => $designCustomization->id,
             'proof_no' => ((int) $designCustomization->proofs()->max('proof_no')) + 1,
             'generated_by' => $request->user()->id,
+            'version_no' => (int) ($designCustomization->current_version_no ?: ($designCustomization->snapshots()->max('version_no') ?: 1)),
             'preview_file_path' => $validated['preview_file_path'],
             'annotated_notes' => $validated['annotated_notes'] ?? null,
             'pricing_snapshot_json' => $designCustomization->pricing_breakdown_json,
+            'proof_summary_json' => [
+                'client_name' => $designCustomization->user?->name,
+                'design_reference' => 'DESIGN-'.$designCustomization->id,
+                'garment_type' => $designCustomization->garment_type,
+                'placement' => $designCustomization->placement_area,
+                'dimensions' => trim(($designCustomization->width_mm ?: '—').' × '.($designCustomization->height_mm ?: '—').' mm'),
+                'colors' => $designCustomization->color_count,
+                'preview_image' => $designCustomization->preview_path,
+                'estimated_stitch_count' => $designCustomization->stitch_count_estimate,
+                'complexity' => $designCustomization->complexity_level,
+                'notes' => $designCustomization->notes,
+                'version_no' => (int) ($designCustomization->current_version_no ?: 1),
+                'approval_status' => 'proof_ready',
+            ],
             'status' => 'pending_client',
             'expires_at' => now()->addDays(2),
         ]);
-        $designCustomization->update(['status' => 'proof_ready']);
+        $designCustomization->update(['status' => 'proof_ready', 'workflow_status' => 'proof_ready']);
 
         if ($designCustomization->order_id) {
             OrderProgressLog::create([
@@ -63,6 +79,14 @@ class DesignProofController extends Controller
             'reference_id' => $proof->id,
             'channel' => 'web',
         ]);
+        DesignWorkflowEvent::create([
+            'design_customization_id' => $designCustomization->id,
+            'actor_user_id' => $request->user()->id,
+            'event_type' => 'proof_generated',
+            'summary' => 'Generated proof #'.$proof->proof_no.'.',
+            'details' => $validated['annotated_notes'] ?? null,
+            'event_meta_json' => ['proof_id' => $proof->id, 'version_no' => $proof->version_no],
+        ]);
         return response()->json($proof, 201);
     }
 
@@ -82,7 +106,10 @@ class DesignProofController extends Controller
         ]);
         $designCustomization->update([
             'status' => $validated['status'] === 'approved' ? 'approved' : 'estimated',
+            'workflow_status' => $validated['status'] === 'approved' ? 'approved' : 'revision_requested',
             'approved_proof_id' => $validated['status'] === 'approved' ? $designProof->id : null,
+            'approved_version_no' => $validated['status'] === 'approved' ? $designProof->version_no : $designCustomization->approved_version_no,
+            'last_revision_requested_at' => $validated['status'] === 'rejected' ? now() : $designCustomization->last_revision_requested_at,
         ]);
         if ($validated['status'] === 'approved') {
             $designCustomization->proofs()->where('id', '!=', $designProof->id)->where('status', 'pending_client')->update(['status' => 'superseded']);
@@ -124,6 +151,14 @@ class DesignProofController extends Controller
                 'channel' => 'web',
             ]);
         }
+        DesignWorkflowEvent::create([
+            'design_customization_id' => $designCustomization->id,
+            'actor_user_id' => $request->user()->id,
+            'event_type' => $validated['status'] === 'approved' ? 'design_approved' : 'revision_requested',
+            'summary' => $validated['status'] === 'approved' ? 'Client approved proof #'.$designProof->proof_no.'.' : 'Client rejected proof #'.$designProof->proof_no.'.',
+            'details' => $validated['annotated_notes'] ?? null,
+            'event_meta_json' => ['proof_id' => $designProof->id, 'version_no' => $designProof->version_no],
+        ]);
         return response()->json($designProof->fresh());
     }
 }

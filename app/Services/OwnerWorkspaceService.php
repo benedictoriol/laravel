@@ -73,7 +73,7 @@ class OwnerWorkspaceService
         $supportTickets = SupportTicket::query()->with(['user:id,name', 'order:id,order_number,current_stage,status', 'assignee:id,name'])->where('shop_id', $shop->id)->latest('id')->limit(80)->get();
 
         $proofRequests = DesignCustomization::query()
-            ->with(['user:id,name', 'designPost.selectedShop:id,shop_name', 'order:id,order_number,shop_id,deadline,due_date,status,current_stage', 'proofs', 'approvedProof'])
+            ->with(['user:id,name', 'designPost.selectedShop:id,shop_name', 'order:id,order_number,shop_id,deadline,due_date,status,current_stage', 'proofs.generator:id,name', 'proofs.responder:id,name', 'approvedProof', 'snapshots.actor:id,name', 'workflowEvents.actor:id,name', 'productionPackages.creator:id,name', 'latestProductionPackage'])
             ->where(function ($query) use ($shop) {
                 $query->whereHas('order', fn ($orderQuery) => $orderQuery->where('shop_id', $shop->id))
                     ->orWhereHas('designPost', fn ($postQuery) => $postQuery->where('selected_shop_id', $shop->id));
@@ -87,6 +87,11 @@ class OwnerWorkspaceService
                 $item->setAttribute('suggested_quote', $item->estimated_total_price ?: ($estimate['suggested_total'] ?? 0));
                 $item->setAttribute('pricing_breakdown_preview', $item->pricing_breakdown_json ?: $estimate);
                 $item->setAttribute('proof_history_count', $item->proofs->count());
+                $item->setAttribute('revision_count', $item->workflowEvents->where('event_type', 'revision_requested')->count());
+                $item->setAttribute('latest_activity', $item->workflowEvents->sortByDesc('id')->first());
+                $item->setAttribute('production_package_count', $item->productionPackages->count());
+                $item->setAttribute('risk_flag_count', count($item->risk_flags_json ?? []));
+                $item->setAttribute('latest_package', $item->latestProductionPackage);
                 return $item;
             });
 

@@ -25,6 +25,7 @@ class DssRecommendation extends Model
     {
         return [
             'score' => 'decimal:4',
+            'context_json' => 'array',
             'generated_at' => 'datetime',
             'created_at' => 'datetime',
         ];

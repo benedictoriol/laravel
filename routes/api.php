@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\Client\SupportTicketController as ClientSupportTick
 use App\Http\Controllers\Api\Owner\SupportTicketController as OwnerSupportTicketController;
 use App\Http\Controllers\Api\DesignCustomizationController;
 use App\Http\Controllers\Api\DesignProofController;
+use App\Http\Controllers\Api\DesignWorkflowController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DesignPostController;
 use App\Http\Controllers\Api\FulfillmentController;
@@ -91,6 +92,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/design-customizations/{designCustomization}/proofs', [DesignProofController::class, 'index']);
     Route::post('/design-customizations/{designCustomization}/proofs', [DesignProofController::class, 'store']);
     Route::post('/design-customizations/{designCustomization}/proofs/{designProof}/respond', [DesignProofController::class, 'respond']);
+    Route::get('/design-customizations/{designCustomization}/versions', [DesignWorkflowController::class, 'versions']);
+    Route::post('/design-customizations/{designCustomization}/versions', [DesignWorkflowController::class, 'createVersion']);
+    Route::post('/design-customizations/{designCustomization}/versions/{snapshot}/restore', [DesignWorkflowController::class, 'restoreVersion']);
+    Route::post('/design-customizations/{designCustomization}/submit-for-quotation', [DesignWorkflowController::class, 'submitForQuotation']);
+    Route::post('/design-customizations/{designCustomization}/submit-for-proofing', [DesignWorkflowController::class, 'submitForProofing']);
+    Route::post('/design-customizations/{designCustomization}/request-revision', [DesignWorkflowController::class, 'requestRevision']);
+    Route::post('/design-customizations/{designCustomization}/approve', [DesignWorkflowController::class, 'approve']);
+    Route::post('/design-customizations/{designCustomization}/owner-proof', [DesignWorkflowController::class, 'ownerCreateProof']);
+    Route::post('/design-customizations/{designCustomization}/production-status', [DesignWorkflowController::class, 'updateOperationalStatus']);
+    Route::post('/design-customizations/{designCustomization}/production-package', [DesignWorkflowController::class, 'createProductionPackage']);
+    Route::post('/design-customizations/{designCustomization}/unlock', [DesignWorkflowController::class, 'unlockDesign']);
 
     Route::get('/shop-projects', [ShopProjectController::class, 'index']);
     Route::post('/shop-projects', [ShopProjectController::class, 'store']);
