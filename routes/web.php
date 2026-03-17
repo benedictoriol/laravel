@@ -16,6 +16,14 @@ Route::get('/', function () {
 
 Route::middleware('auth')->group(function () {
     Route::get('/dashboard', function () {
+        $user = request()->user();
+        if ($user?->role === 'client') {
+            return redirect()->route('client.dashboard');
+        }
+        if ($user?->role === 'owner') {
+            return redirect()->route('owner.dashboard');
+        }
+
         return Inertia::render('Dashboard');
     })->name('dashboard');
 

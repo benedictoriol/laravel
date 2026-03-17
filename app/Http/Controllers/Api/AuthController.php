@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ClientProfile;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 
@@ -35,6 +36,10 @@ class AuthController extends Controller
         }
 
         $token = $user->createToken('spa')->plainTextToken;
+        if (method_exists($request, 'hasSession') && $request->hasSession()) {
+            Auth::login($user);
+            $request->session()->regenerate();
+        }
 
         return response()->json([
             'token' => $token,
@@ -67,6 +72,10 @@ class AuthController extends Controller
         $user->tokens()->delete();
 
         $token = $user->createToken('spa')->plainTextToken;
+        if (method_exists($request, 'hasSession') && $request->hasSession()) {
+            Auth::login($user);
+            $request->session()->regenerate();
+        }
 
         return response()->json([
             'token' => $token,
@@ -93,6 +102,11 @@ class AuthController extends Controller
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()?->delete();
+        if (method_exists($request, 'hasSession') && $request->hasSession()) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+        }
 
         return response()->json([
             'message' => 'Logged out successfully.',

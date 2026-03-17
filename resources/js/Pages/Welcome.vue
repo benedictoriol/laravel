@@ -18,6 +18,7 @@ const registerForm = ref({
   email: '',
   phone: '',
   password: '',
+  password_confirmation: '',
   role: 'client',
 });
 
@@ -42,14 +43,14 @@ async function submit() {
   success.value = '';
   try {
     if (mode.value === 'login') {
-      const { data } = await window.axios.post('/api/auth/login', loginForm.value);
+      const { data } = await window.axios.post('/login', loginForm.value);
       window.localStorage.setItem('embro_token', data.token);
       applyApiToken(data.token);
       window.location.href = data.redirect_role === 'owner' ? '/owner-dashboard' : (data.redirect_role === 'client' ? '/client-dashboard' : '/dashboard');
       return;
     }
 
-    const { data } = await window.axios.post('/api/auth/register', registerForm.value);
+    const { data } = await window.axios.post('/register', registerForm.value);
     window.localStorage.setItem('embro_token', data.token);
     applyApiToken(data.token);
     window.location.href = data.redirect_role === 'owner' ? '/owner-dashboard' : (data.redirect_role === 'client' ? '/client-dashboard' : '/dashboard');
@@ -166,6 +167,10 @@ async function submit() {
             <div>
               <label class="mb-2 block text-sm font-medium text-stone-700">Password</label>
               <input v-model="registerForm.password" type="password" minlength="8" class="w-full rounded-2xl border border-stone-300 bg-white px-4 py-3 text-stone-900 outline-none transition focus:border-stone-500" required>
+            </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium text-stone-700">Confirm password</label>
+              <input v-model="registerForm.password_confirmation" type="password" minlength="8" class="w-full rounded-2xl border border-stone-300 bg-white px-4 py-3 text-stone-900 outline-none transition focus:border-stone-500" required>
             </div>
           </template>
 

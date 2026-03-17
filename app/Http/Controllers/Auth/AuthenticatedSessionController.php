@@ -18,22 +18,52 @@ class AuthenticatedSessionController extends Controller
      */
     public function create(): Response
     {
-        return Inertia::render('Auth/Login', [
-            'canResetPassword' => Route::has('password.request'),
-            'status' => session('status'),
+        return Inertia::render('Welcome', [
+            'canLogin' => true,
+            'canRegister' => true,
+            'laravelVersion' => app()->version(),
+            'phpVersion' => PHP_VERSION,
         ]);
     }
 
     /**
      * Handle an incoming authentication request.
      */
-    public function store(LoginRequest $request): RedirectResponse
+    public function store(LoginRequest $request): RedirectResponse|\Illuminate\Http\JsonResponse
     {
         $request->authenticate();
 
         $request->session()->regenerate();
 
-        return redirect()->intended(route('dashboard', absolute: false));
+        $user = $request->user();
+        $user->forceFill(['last_login_at' => now()])->save();
+        $user->tokens()->delete();
+        $token = $user->createToken('spa')->plainTextToken;
+
+        $redirectPath = match ($user->role) {
+            'owner' => '/owner-dashboard',
+            'client' => '/client-dashboard',
+            default => '/dashboard',
+        };
+
+        if ($request->expectsJson() || $request->wantsJson()) {
+            return response()->json([
+                'token' => $token,
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'role' => $user->role,
+                    'shop_id' => $user->shop_id,
+                    'phone' => $user->phone,
+                    'is_active' => $user->is_active,
+                ],
+                'redirect_role' => $user->role,
+                'redirect_path' => $redirectPath,
+            ]);
+        }
+
+        return redirect()->intended($redirectPath);
     }
 
     /**
