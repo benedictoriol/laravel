@@ -8,6 +8,8 @@ use App\Models\DssShopMetric;
 use App\Models\Order;
 use App\Models\OrderAssignment;
 use App\Models\OrderException;
+use App\Models\MaterialConsumption;
+use App\Models\MaterialMovement;
 use App\Models\OrderProgressLog;
 use App\Models\RawMaterial;
 use App\Models\Shop;
@@ -156,19 +158,23 @@ class ProductionOrchestrationService
     public function reserveMaterials(Order $order, ?User $actor = null): array
     {
         $customization = $order->customizations()->latest('id')->first();
-        $colors = (int) ($customization->color_count ?? 1);
+        $packageId = $customization?->latest_production_package_id;
+        $colors = max(1, (int) ($customization->color_count ?? 1));
         $quantity = max(1, (int) ($customization->quantity ?? $order->items()->sum('quantity') ?: 1));
         $stitches = max(1000, (int) ($customization->stitch_count_estimate ?? 1500));
 
-        $threadUsage = max(1, (int) ceil(($stitches * $quantity) / 5000));
-        $backingUsage = max(1, (int) ceil($quantity / 5));
-        $stabilizerUsage = max(1, (int) ceil($quantity / 10));
+        $threadUsage = max(1, ceil(($stitches * $quantity) / 5000));
+        $backingUsage = max(1, ceil($quantity / 5));
+        $stabilizerUsage = max(1, ceil($quantity / 10));
 
         $requirements = [
-            ['category' => 'thread', 'quantity' => $threadUsage, 'label' => $colors.' color thread set'],
-            ['category' => 'backing', 'quantity' => $backingUsage, 'label' => 'backing'],
-            ['category' => 'stabilizer', 'quantity' => $stabilizerUsage, 'label' => 'stabilizer'],
+            ['category' => 'thread', 'quantity' => (float) $threadUsage, 'label' => $colors.' color thread set'],
+            ['category' => 'backing', 'quantity' => (float) $backingUsage, 'label' => 'backing'],
+            ['category' => 'stabilizer', 'quantity' => (float) $stabilizerUsage, 'label' => 'stabilizer'],
         ];
+
+        MaterialConsumption::query()->where('order_id', $order->id)->delete();
+        MaterialMovement::query()->where('order_id', $order->id)->delete();
 
         $materialPlan = [];
         foreach ($requirements as $requirement) {
@@ -187,11 +193,52 @@ class ProductionOrchestrationService
             $before = (float) $material->stock_quantity;
             $reserved = min($before, (float) $requirement['quantity']);
             $after = max(0, $before - $reserved);
-            $material->update(['stock_quantity' => $after]);
+            $existingReserved = (float) ($material->reserved_quantity ?? 0);
+            $material->update([
+                'stock_quantity' => $after,
+                'reserved_quantity' => $existingReserved + $reserved,
+                'stock_status' => method_exists($material, 'refreshStockStatus') ? $material->refreshStockStatus() : ($after <= 0 ? 'out_of_stock' : 'in_stock'),
+            ]);
 
-            if ($after <= (float) ($material->reorder_level ?? 0)) {
+            if ($reserved < (float) $requirement['quantity'] || $after <= (float) ($material->reorder_threshold ?? $material->reorder_level ?? 0)) {
                 $this->createShortageAlert($order, $material->material_name, (float) $requirement['quantity'], $after);
             }
+
+            $consumption = MaterialConsumption::create([
+                'shop_id' => $order->shop_id,
+                'order_id' => $order->id,
+                'design_customization_id' => $customization?->id,
+                'production_package_id' => $packageId,
+                'raw_material_id' => $material->id,
+                'material_name_snapshot' => $material->material_name,
+                'material_code_snapshot' => $material->material_code ?? $material->sku,
+                'material_category' => $material->category,
+                'usage_type' => 'reservation',
+                'unit' => $material->unit ?? 'pcs',
+                'estimated_quantity' => (float) $requirement['quantity'],
+                'reserved_quantity' => $reserved,
+                'consumed_quantity' => 0,
+                'remaining_available_stock' => max(0, $after - (float) ($material->reserved_quantity ?? 0)),
+                'status' => $reserved >= (float) $requirement['quantity'] ? 'reserved' : 'partial',
+                'meta_json' => [
+                    'label' => $requirement['label'],
+                    'source' => 'auto_production_reservation',
+                ],
+                'created_by' => $actor?->id,
+            ]);
+
+            MaterialMovement::create([
+                'shop_id' => $order->shop_id,
+                'order_id' => $order->id,
+                'raw_material_id' => $material->id,
+                'material_consumption_id' => $consumption->id,
+                'source' => 'warehouse',
+                'destination' => 'production',
+                'quantity' => $reserved,
+                'movement_date' => now(),
+                'responsible_user_id' => $actor?->id,
+                'notes' => 'Automatic reservation before production starts.',
+            ]);
 
             $this->trace->log($actor?->id, $order->shop_id, 'raw_material', $material->id, 'auto_reserved_for_order', [
                 'order_id' => $order->id,
@@ -205,11 +252,14 @@ class ProductionOrchestrationService
 
             $materialPlan[] = [
                 'category' => $requirement['category'],
+                'material_id' => $material->id,
                 'material' => $material->material_name,
-                'required' => $requirement['quantity'],
+                'required' => (float) $requirement['quantity'],
                 'reserved' => $reserved,
+                'consumed' => 0,
                 'remaining' => $after,
-                'status' => $reserved >= $requirement['quantity'] ? 'reserved' : 'partial',
+                'available_stock' => max(0, $after - (float) ($material->reserved_quantity ?? 0)),
+                'status' => $reserved >= (float) $requirement['quantity'] ? 'reserved' : 'partial',
             ];
         }
 

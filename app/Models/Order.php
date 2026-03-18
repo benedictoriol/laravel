@@ -126,6 +126,17 @@ class Order extends Model
         return $this->hasMany(DesignCustomization::class);
     }
 
+
+    public function materialConsumptions()
+    {
+        return $this->hasMany(MaterialConsumption::class);
+    }
+
+    public function materialMovements()
+    {
+        return $this->hasMany(MaterialMovement::class);
+    }
+
     public function approvedQuote()
     {
         return $this->belongsTo(OrderQuote::class, 'approved_quote_id');

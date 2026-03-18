@@ -6,6 +6,8 @@ use App\Models\DesignCustomization;
 use App\Models\DesignDigitizingJob;
 use App\Models\DesignMachineFile;
 use App\Models\DisputeCase;
+use App\Models\MaterialConsumption;
+use App\Models\MaterialMovement;
 use App\Models\MessageThread;
 use App\Models\OperationalAlert;
 use App\Models\Order;
@@ -64,6 +66,8 @@ class OwnerWorkspaceService
         $suppliers = Supplier::query()->where('shop_id', $shop->id)->latest('id')->get();
         $materials = RawMaterial::query()->with('supplier:id,name')->where('shop_id', $shop->id)->latest('id')->get();
         $supplyOrders = SupplyOrder::query()->with('supplier:id,name')->where('shop_id', $shop->id)->latest('id')->get();
+        $materialConsumptions = MaterialConsumption::query()->with(['order:id,order_number,status,current_stage', 'rawMaterial:id,material_name,unit,stock_quantity,reserved_quantity,stock_status'])->where('shop_id', $shop->id)->latest('id')->get();
+        $materialMovements = MaterialMovement::query()->with(['order:id,order_number', 'rawMaterial:id,material_name,unit', 'responsiblePerson:id,name'])->where('shop_id', $shop->id)->latest('id')->limit(200)->get();
         $qualityChecks = QualityCheck::query()->with(['order:id,order_number,current_stage,status', 'checker:id,name'])->where('shop_id', $shop->id)->latest('id')->get();
         $projects = ShopProject::query()->where('shop_id', $shop->id)->latest('id')->get();
         $threads = MessageThread::query()->with(['messages.sender:id,name'])->where('shop_id', $shop->id)->latest('last_message_at')->limit(40)->get();
@@ -326,6 +330,70 @@ class OwnerWorkspaceService
             'by_category' => $shopNotifications->countBy('category'),
         ];
 
+        $incomingSupplyMonitoring = $supplyOrders->map(function (SupplyOrder $supplyOrder) {
+            $materials = collect($supplyOrder->materials_json ?? []);
+            return [
+                'id' => $supplyOrder->id,
+                'purchase_order_number' => $supplyOrder->po_number,
+                'supplier' => $supplyOrder->supplier?->name,
+                'material_name' => $materials->pluck('material_name')->filter()->implode(', '),
+                'quantity_ordered' => (float) $supplyOrder->quantity_total,
+                'quantity_received' => (float) ($supplyOrder->quantity_received ?? 0),
+                'expected_arrival_date' => optional($supplyOrder->expected_arrival_at)->toDateString(),
+                'actual_arrival_date' => optional($supplyOrder->actual_arrival_at ?? $supplyOrder->received_at)->toDateString(),
+                'delivery_status' => $supplyOrder->delivery_status ?? $supplyOrder->status ?? 'pending',
+            ];
+        })->values();
+
+        $productionMaterialAllocation = $materialConsumptions->map(function (MaterialConsumption $consumption) {
+            $material = $consumption->rawMaterial;
+            return [
+                'id' => $consumption->id,
+                'order_id' => $consumption->order_id,
+                'order_number' => $consumption->order?->order_number,
+                'material_name' => $consumption->material_name_snapshot,
+                'unit' => $consumption->unit,
+                'materials_allocated' => (float) $consumption->estimated_quantity,
+                'quantity_reserved' => (float) $consumption->reserved_quantity,
+                'quantity_consumed' => (float) $consumption->consumed_quantity,
+                'remaining_available_stock' => $material ? max(0, (float) $material->stock_quantity - (float) ($material->reserved_quantity ?? 0)) : (float) $consumption->remaining_available_stock,
+                'status' => $consumption->status,
+            ];
+        })->values();
+
+        $shortageDetection = $productionMaterialAllocation
+            ->filter(fn ($row) => $row['quantity_reserved'] < $row['materials_allocated'] || $row['remaining_available_stock'] <= 0)
+            ->map(function ($row) {
+                $gap = max(0, (float) $row['materials_allocated'] - (float) $row['quantity_reserved']);
+                return [
+                    'material_name' => $row['material_name'],
+                    'affected_order' => $row['order_number'],
+                    'shortage' => $gap,
+                    'urgency_level' => $gap > 0 ? 'high' : 'medium',
+                ];
+            })
+            ->values();
+
+        $materialMovementTracking = $materialMovements->map(function (MaterialMovement $movement) {
+            return [
+                'id' => $movement->id,
+                'order_number' => $movement->order?->order_number,
+                'material_name' => $movement->rawMaterial?->material_name,
+                'source' => $movement->source,
+                'destination' => $movement->destination,
+                'quantity' => (float) $movement->quantity,
+                'date' => optional($movement->movement_date)->toDateTimeString(),
+                'responsible_person' => $movement->responsiblePerson?->name,
+            ];
+        })->values();
+
+        $supplyChain = [
+            'incoming_supply_monitoring' => $incomingSupplyMonitoring,
+            'material_movement_tracking' => $materialMovementTracking,
+            'production_material_allocation' => $productionMaterialAllocation,
+            'shortage_detection' => $shortageDetection,
+        ];
+
         $acceptedQuotes = OrderQuote::query()->where('shop_id', $shop->id)->where('status', 'accepted')->get();
         $rejectedQuotes = OrderQuote::query()->where('shop_id', $shop->id)->where('status', 'rejected')->get();
         $hasPricingInsights = $acceptedQuotes->count() + $rejectedQuotes->count() >= 3;
@@ -410,7 +478,7 @@ class OwnerWorkspaceService
             'supplier_management' => $suppliers,
             'raw_materials' => $materials,
             'restock_recommendations' => $restockRecommendations,
-            'supply_chain' => $supplyOrders,
+            'supply_chain' => $supplyChain,
             'staff' => $staff,
             'staff_directory' => $shopMembers,
             'staff_candidates' => $clientCandidates,

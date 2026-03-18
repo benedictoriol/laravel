@@ -19,7 +19,7 @@ const flash = reactive({ type: 'info', text: '' });
 
 const serviceForm = reactive({ service_name: '', category: '', base_price: '', unit_price: '', min_order_qty: '', stitch_range: '', complexity_multiplier: '', rush_multiplier: '', rush_fee_allowed: true });
 const supplierForm = reactive({ name: '', contact_person: '', phone: '', email: '', address: '', materials_supplied: '', lead_time_days: '', status: 'active' });
-const materialForm = reactive({ material_name: '', category: '', color: '', unit: 'pcs', stock_quantity: '', reorder_level: '', cost_per_unit: '', supplier_id: '' });
+const materialForm = reactive({ material_name: '', material_code: '', sku: '', category: '', description: '', color: '', unit: 'spool', stock_quantity: '', minimum_stock_level: '', reorder_level: '', reorder_threshold: '', maximum_stock_capacity: '', supplier_id: '', supplier_name: '', supplier_code: '', preferred_supplier: false, cost_per_unit: '', unit_purchase_cost: '', latest_cost: '', average_cost: '', selling_cost_contribution: '', estimated_usage_per_order_unit: '', usage_measurement: '', thread_color: '', thread_type: '', brand: '', thickness: '', fabric_type: '', fabric_color: '', texture: '', backing_type: '', weight: '' });
 const projectForm = reactive({ title: '', starting_price: '', description: '', embroidery_size: '', canvas_used: '', category: 'custom_project', preview_image: null });
 const courierForm = reactive({ name: '', contact_person: '', contact_number: '', service_type: 'delivery', coverage_area: '' });
 const staffAccountForm = reactive({ name: '', email: '', password: '', phone: '', member_role: 'hr', position: '' });
@@ -48,7 +48,7 @@ const navItems = computed(() => [
   { key: 'projects', label: 'Projects', badge: data.value?.projects?.length || null },
   { key: 'suppliers', label: 'Supplier Management', badge: data.value?.supplier_management?.length || null },
   { key: 'materials', label: 'Raw Materials', badge: data.value?.raw_materials?.length || null },
-  { key: 'supply', label: 'Supply Chain', badge: data.value?.supply_chain?.length || null },
+  { key: 'supply', label: 'Supply Chain', badge: data.value?.supply_chain?.shortage_detection?.length || data.value?.supply_chain?.incoming_supply_monitoring?.length || null },
   { key: 'staff', label: 'Staff', badge: data.value?.staff?.length || null },
   { key: 'operations', label: 'Operations' },
   { key: 'schedule', label: 'Workforce Scheduling', badge: data.value?.workforce_scheduling?.length || null },
@@ -58,6 +58,7 @@ const navItems = computed(() => [
   { key: 'marketplace', label: 'Marketplace' },
   { key: 'analytics', label: 'Analytics' },
   { key: 'preferences', label: 'Preferences' },
+  { key: 'profile', label: 'Profile' },
 ]);
 
 const pageTitle = computed(() => navItems.value.find((i) => i.key === active.value)?.label || 'Owner Workspace');
@@ -66,6 +67,8 @@ const pageSubtitle = computed(() => ({
   proofing: 'Client design requests, proofing workflow, and automated quote suggestions.',
   pricing: 'Service price list and pricing defaults powering the shop quotation flow.',
   preferences: 'Shop information, workflow automation, documents, security, and approvals.',
+  supply: 'Incoming supplies, warehouse movement, stock reservation, and shortage monitoring.',
+  profile: 'Owner account and shop identity details.',
 }[active.value] || 'Production-oriented owner workspace tied to live API data.'));
 
 const overviewStats = computed(() => data.value?.overview?.stats || {});
@@ -383,7 +386,7 @@ onMounted(load);
 
     <div v-if="loading" class="rounded-3xl border border-stone-200 bg-white p-10 text-sm text-stone-500 shadow-sm">Loading owner workspace…</div>
     <div v-else class="space-y-4">
-      <div v-if="flash.text" class="rounded-2xl border px-4 py-3 text-sm" :class="flash.type === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">{{ flash.text }}</div>
+      <div v-if="flash.text" class="fixed right-4 top-4 z-[80] max-w-md rounded-2xl border px-4 py-3 text-sm shadow-lg" :class="flash.type === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">{{ flash.text }}</div>
 
       <template v-if="active === 'overview'">
         <SectionCard title="Overview dashboard" description="Recent orders, business signals, and operational alerts in one view.">
@@ -771,12 +774,137 @@ onMounted(load);
       </template>
 
       <template v-else-if="active === 'materials'">
-        <div class="grid gap-4 xl:grid-cols-[1fr_0.85fr]">
-          <SectionCard title="Raw materials" description="Live inventory and reorder readiness.">
-            <div class="space-y-3"><div v-for="material in data?.raw_materials || []" :key="material.id" class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="flex items-center justify-between"><div class="font-semibold text-stone-900">{{ material.material_name }}</div><div class="text-xs uppercase tracking-[0.2em] text-stone-500">{{ material.category }}</div></div><div class="mt-2 text-sm text-stone-600">Stock {{ material.stock_quantity }} {{ material.unit }} · Reorder {{ material.reorder_level }}</div></div></div>
+        <div class="grid gap-4 xl:grid-cols-[1fr_0.95fr]">
+          <SectionCard title="Raw materials" description="Live inventory, costing, supplier links, and automatic stock status.">
+            <div class="space-y-3">
+              <div v-for="material in data?.raw_materials || []" :key="material.id" class="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="font-semibold text-stone-900">{{ material.material_name }}</div>
+                    <div class="mt-1 text-xs uppercase tracking-[0.2em] text-stone-500">{{ material.category }} · {{ material.material_code || material.sku || 'No SKU' }}</div>
+                  </div>
+                  <div class="rounded-full border border-stone-300 px-3 py-1 text-xs uppercase tracking-[0.2em] text-stone-700">{{ material.stock_status }}</div>
+                </div>
+                <div class="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-sm text-stone-600">
+                  <div>Stock {{ material.stock_quantity }} {{ material.unit }}</div>
+                  <div>Reserved {{ material.reserved_quantity || 0 }}</div>
+                  <div>Available {{ material.available_stock || material.stock_quantity }}</div>
+                  <div>Reorder {{ material.reorder_threshold || material.reorder_level || 0 }}</div>
+                </div>
+                <div class="mt-3 text-sm text-stone-500">Supplier: {{ material.supplier_name_display || '—' }} · Avg cost ₱ {{ money(material.average_cost || material.cost_per_unit) }}</div>
+              </div>
+            </div>
           </SectionCard>
-          <SectionCard title="Add material" description="Category is now a controlled selection.">
-            <div class="grid gap-3"><input v-model="materialForm.material_name" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Material name"><select v-model="materialForm.category" class="rounded-2xl border border-stone-300 px-4 py-3"><option value="">Select category</option><option value="thread">Thread</option><option value="fabric">Fabric</option><option value="stabilizer">Stabilizer</option><option value="backing">Backing</option><option value="needle">Needle</option><option value="packaging">Packaging</option><option value="other">Other</option></select><div class="grid gap-3 md:grid-cols-2"><input v-model="materialForm.stock_quantity" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Stock quantity"><input v-model="materialForm.reorder_level" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Reorder level"></div><button class="rounded-2xl bg-stone-900 px-4 py-3 text-sm font-medium text-white" :disabled="saving" @click="createMaterial">Save material</button></div>
+          <SectionCard title="Add raw material" description="Capture inventory, supplier, costing, usage logic, and material-specific attributes.">
+            <div class="grid gap-3">
+              <div class="grid gap-3 md:grid-cols-2">
+                <input v-model="materialForm.material_name" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Material name">
+                <input v-model="materialForm.material_code" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Material code / SKU">
+              </div>
+              <div class="grid gap-3 md:grid-cols-2">
+                <select v-model="materialForm.category" class="rounded-2xl border border-stone-300 px-4 py-3">
+                  <option value="">Select category</option>
+                  <option value="embroidery thread">Embroidery thread</option>
+                  <option value="fabric">Fabric</option>
+                  <option value="stabilizer">Stabilizer</option>
+                  <option value="backing">Backing</option>
+                  <option value="needle">Needle</option>
+                  <option value="patch base">Patch base</option>
+                  <option value="packaging material">Packaging material</option>
+                  <option value="accessory">Accessory</option>
+                </select>
+                <input v-model="materialForm.unit" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Unit type">
+              </div>
+              <textarea v-model="materialForm.description" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Description"></textarea>
+              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <input v-model="materialForm.stock_quantity" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Current stock">
+                <input v-model="materialForm.minimum_stock_level" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Minimum stock level">
+                <input v-model="materialForm.reorder_threshold" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Reorder threshold">
+                <input v-model="materialForm.maximum_stock_capacity" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Maximum stock capacity">
+              </div>
+              <div class="grid gap-3 md:grid-cols-3">
+                <select v-model="materialForm.supplier_id" class="rounded-2xl border border-stone-300 px-4 py-3"><option value="">Linked supplier</option><option v-for="supplier in data?.supplier_management || []" :key="supplier.id" :value="supplier.id">{{ supplier.name }}</option></select>
+                <input v-model="materialForm.supplier_name" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Supplier name snapshot">
+                <input v-model="materialForm.supplier_code" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Supplier code">
+              </div>
+              <label class="flex items-center gap-2 rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-700"><input v-model="materialForm.preferred_supplier" type="checkbox"> Preferred supplier</label>
+              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <input v-model="materialForm.unit_purchase_cost" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Unit purchase cost">
+                <input v-model="materialForm.latest_cost" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Latest cost">
+                <input v-model="materialForm.average_cost" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Average cost">
+                <input v-model="materialForm.selling_cost_contribution" type="number" min="0" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Selling cost contribution">
+              </div>
+              <div class="grid gap-3 md:grid-cols-2">
+                <input v-model="materialForm.estimated_usage_per_order_unit" type="number" min="0" step="0.0001" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Estimated usage per order unit">
+                <input v-model="materialForm.usage_measurement" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Usage measurement">
+              </div>
+              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <input v-model="materialForm.thread_color" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Thread color">
+                <input v-model="materialForm.thread_type" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Thread type">
+                <input v-model="materialForm.brand" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Brand">
+                <input v-model="materialForm.thickness" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Thickness">
+              </div>
+              <div class="grid gap-3 md:grid-cols-3">
+                <input v-model="materialForm.fabric_type" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Fabric type">
+                <input v-model="materialForm.fabric_color" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Fabric color">
+                <input v-model="materialForm.texture" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Texture">
+              </div>
+              <div class="grid gap-3 md:grid-cols-2">
+                <input v-model="materialForm.backing_type" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Backing type">
+                <input v-model="materialForm.weight" class="rounded-2xl border border-stone-300 px-4 py-3" placeholder="Backing weight">
+              </div>
+              <button class="rounded-2xl bg-stone-900 px-4 py-3 text-sm font-medium text-white" :disabled="saving" @click="createMaterial">Save material</button>
+            </div>
+          </SectionCard>
+        </div>
+      </template>
+
+      <template v-else-if="active === 'supply'">
+        <div class="grid gap-4 xl:grid-cols-2">
+          <SectionCard title="Incoming supply monitoring" description="Track purchase orders, arrivals, and delivery status.">
+            <div class="space-y-3">
+              <div v-for="row in data?.supply_chain?.incoming_supply_monitoring || []" :key="row.id" class="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                <div class="flex items-center justify-between gap-3"><div class="font-semibold text-stone-900">{{ row.purchase_order_number }}</div><div class="text-xs uppercase tracking-[0.2em] text-stone-500">{{ row.delivery_status }}</div></div>
+                <div class="mt-2 text-sm text-stone-600">{{ row.supplier || 'No supplier' }} · {{ row.material_name || 'No material listed' }}</div>
+                <div class="mt-3 grid gap-2 md:grid-cols-2 text-sm text-stone-500">
+                  <div>Ordered: {{ row.quantity_ordered }}</div><div>Received: {{ row.quantity_received }}</div>
+                  <div>Expected: {{ row.expected_arrival_date || '—' }}</div><div>Actual: {{ row.actual_arrival_date || '—' }}</div>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+          <SectionCard title="Material movement tracking" description="Supplier → warehouse → production → QC → finished goods visibility.">
+            <div class="space-y-3">
+              <div v-for="move in data?.supply_chain?.material_movement_tracking || []" :key="move.id" class="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm text-stone-600">
+                <div class="flex items-center justify-between gap-3"><div class="font-semibold text-stone-900">{{ move.material_name || 'Material movement' }}</div><div>{{ move.quantity }}</div></div>
+                <div class="mt-2">{{ move.source }} → {{ move.destination }}</div>
+                <div class="mt-1 text-xs text-stone-500">{{ move.order_number || 'No order' }} · {{ move.date || '—' }} · {{ move.responsible_person || 'Unassigned' }}</div>
+              </div>
+            </div>
+          </SectionCard>
+          <SectionCard title="Production material allocation" description="Reserved, consumed, and remaining stock per order.">
+            <div class="space-y-3">
+              <div v-for="allocation in data?.supply_chain?.production_material_allocation || []" :key="allocation.id" class="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                <div class="flex items-center justify-between gap-3"><div class="font-semibold text-stone-900">{{ allocation.order_number || 'Order allocation' }}</div><div class="text-xs uppercase tracking-[0.2em] text-stone-500">{{ allocation.status }}</div></div>
+                <div class="mt-2 text-sm text-stone-600">{{ allocation.material_name }}</div>
+                <div class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4 text-sm text-stone-500">
+                  <div>Allocated: {{ allocation.materials_allocated }} {{ allocation.unit }}</div>
+                  <div>Reserved: {{ allocation.quantity_reserved }}</div>
+                  <div>Consumed: {{ allocation.quantity_consumed }}</div>
+                  <div>Remaining stock: {{ allocation.remaining_available_stock }}</div>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+          <SectionCard title="Shortage detection" description="Automatic stock reservation risk and affected orders.">
+            <div class="space-y-3">
+              <div v-if="!(data?.supply_chain?.shortage_detection || []).length" class="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm text-stone-500">No active material shortage risk detected.</div>
+              <div v-for="item in data?.supply_chain?.shortage_detection || []" :key="`${item.affected_order}-${item.material_name}`" class="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div class="flex items-center justify-between gap-3"><div class="font-semibold text-rose-700">{{ item.material_name }}</div><div class="text-xs uppercase tracking-[0.2em] text-rose-600">{{ item.urgency_level }}</div></div>
+                <div class="mt-2 text-sm text-rose-700">Affected order: {{ item.affected_order }}</div>
+                <div class="mt-1 text-xs text-rose-600">Shortage: {{ item.shortage }}</div>
+              </div>
+            </div>
           </SectionCard>
         </div>
       </template>
@@ -883,6 +1011,27 @@ onMounted(load);
           </SectionCard>
         </div>
       </template>
+
+      <template v-else-if="active === 'profile'">
+        <div class="grid gap-4 xl:grid-cols-[1fr_0.9fr]">
+          <SectionCard title="Owner profile" description="Primary account and shop identity snapshot.">
+            <div class="grid gap-4 md:grid-cols-2 text-sm text-stone-600">
+              <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="text-xs uppercase tracking-[0.2em] text-stone-400">Name</div><div class="mt-2 text-base font-semibold text-stone-900">{{ user?.name || '—' }}</div></div>
+              <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="text-xs uppercase tracking-[0.2em] text-stone-400">Role</div><div class="mt-2 text-base font-semibold capitalize text-stone-900">{{ user?.role || '—' }}</div></div>
+              <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="text-xs uppercase tracking-[0.2em] text-stone-400">Email</div><div class="mt-2 text-base font-semibold text-stone-900">{{ user?.email || '—' }}</div></div>
+              <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="text-xs uppercase tracking-[0.2em] text-stone-400">Shop</div><div class="mt-2 text-base font-semibold text-stone-900">{{ data?.shop?.shop_name || '—' }}</div></div>
+            </div>
+          </SectionCard>
+          <SectionCard title="Shop snapshot" description="Quick shop profile details shown from saved settings.">
+            <div class="space-y-3 text-sm text-stone-600">
+              <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="text-xs uppercase tracking-[0.2em] text-stone-400">Contact</div><div class="mt-2 text-base font-semibold text-stone-900">{{ data?.settings?.contact_email || data?.shop?.contact_email || '—' }}</div></div>
+              <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="text-xs uppercase tracking-[0.2em] text-stone-400">Operating hours</div><div class="mt-2 text-base font-semibold text-stone-900">{{ data?.settings?.operating_hours || '—' }}</div></div>
+              <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4"><div class="text-xs uppercase tracking-[0.2em] text-stone-400">Address</div><div class="mt-2 text-base font-semibold text-stone-900">{{ data?.settings?.address || data?.shop?.address || '—' }}</div></div>
+            </div>
+          </SectionCard>
+        </div>
+      </template>
+
 
       <template v-else-if="active === 'preferences'">
         <div class="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
